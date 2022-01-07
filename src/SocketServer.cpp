@@ -37,7 +37,12 @@ extern "C"
 #include "Listener.h"
 #include "Misc.h"
 
-const unsigned int ONBOARD_LED = D4;				// GPIO 2
+#include <cstring>
+#include <algorithm>
+
+#include "esp_attr.h"
+
+const unsigned int ONBOARD_LED = 2;					// GPIO 2
 const bool ONBOARD_LED_ON = false;					// active low
 const uint32_t ONBOARD_LED_BLINK_INTERVAL = 500;	// ms
 const uint32_t TransferReadyTimeout = 10;			// how many milliseconds we allow for the Duet to set TransferReady low after the end of a transaction, before we assume that we missed seeing it
@@ -611,7 +616,7 @@ void RebuildServices()
 // Send a response.
 // 'response' is the number of byes of response if positive, or the error code if negative.
 // Use only to respond to commands which don't include a data block, or when we don't want to read the data block.
-void ICACHE_RAM_ATTR SendResponse(int32_t response)
+void IRAM_ATTR SendResponse(int32_t response)
 {
 	(void)hspi.transfer32(response);
 	if (response > 0)
@@ -621,7 +626,7 @@ void ICACHE_RAM_ATTR SendResponse(int32_t response)
 }
 
 // This is called when the SAM is asking to transfer data
-void ICACHE_RAM_ATTR ProcessRequest()
+void IRAM_ATTR ProcessRequest()
 {
 	// Set up our own headers
 	messageHeaderIn.hdr.formatVersion = InvalidFormatVersion;
@@ -1110,7 +1115,7 @@ void ICACHE_RAM_ATTR ProcessRequest()
 	}
 }
 
-void ICACHE_RAM_ATTR TransferReadyIsr()
+void IRAM_ATTR TransferReadyIsr()
 {
 	transferReadyChanged = true;
 }
