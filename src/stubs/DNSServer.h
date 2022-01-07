@@ -16,7 +16,7 @@ enum class DNSReplyCode
 class DNSServer
 {
   public:
-    DNSServer();
+    DNSServer() { };
     void processNextRequest();
     void setErrorReplyCode(const DNSReplyCode &replyCode);
     bool start(const uint16_t &port,
