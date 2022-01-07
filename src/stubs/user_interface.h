@@ -1,6 +1,5 @@
 #pragma once
 
-
 typedef enum {
     STATION_IDLE = 0,
     STATION_CONNECTING,

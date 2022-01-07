@@ -16,23 +16,8 @@ typedef enum {
     WL_DISCONNECTED     = 6
 } wl_status_t;
 
-class IPAddress { //: public Printable {
-    // private:
-    //     union {
-    //             uint8_t bytes[4];  // IPv4 address
-    //             uint32_t dword;
-    //     } _address;
-
-    //     // Access the raw byte array containing the address.  Because this returns a pointer
-    //     // to the internal structure rather than a copy of the address this function should only
-    //     // be used when you know that the usage of the returned uint8_t* will be transient and not
-    //     // stored.
-    //     uint8_t* raw_address() {
-    //         return _address.bytes;
-    //     }
-
+class IPAddress {    
     public:
-        // Constructors
         IPAddress();
         IPAddress(uint8_t first_octet, uint8_t second_octet, uint8_t third_octet, uint8_t fourth_octet);
         IPAddress(uint32_t address);
@@ -41,54 +26,16 @@ class IPAddress { //: public Printable {
         operator uint32_t() const {
             return 0;
         }
-
-    //     bool fromString(const char *address);
-    //     bool fromString(const String &address) { return fromString(address.c_str()); }
-
-    //     // Overloaded cast operator to allow IPAddress objects to be used where a pointer
-    //     // to a four-byte uint8_t array is expected
-    //     operator uint32_t() const {
-    //         return _address.dword;
-    //     }
-    //     bool operator==(const IPAddress& addr) const {
-    //         return _address.dword == addr._address.dword;
-    //     }
-    //     bool operator==(uint32_t addr) const {
-    //         return _address.dword == addr;
-    //     }
-    //     bool operator==(const uint8_t* addr) const;
-
-    //     // Overloaded index operator to allow getting and setting individual octets of the address
-    //     uint8_t operator[](int index) const {
-    //         return _address.bytes[index];
-    //     }
-    //     uint8_t& operator[](int index) {
-    //         return _address.bytes[index];
-    //     }
-
-        // Overloaded copy operators to allow initialisation of IPAddress objects from other types
         IPAddress& operator=(const uint8_t *address);
         IPAddress& operator=(uint32_t address);
-
-    //     virtual size_t printTo(Print& p) const;
-    //     String toString() const;
-
-    //     friend class EthernetClass;
-    //     friend class UDP;
-    //     friend class Client;
-    //     friend class Server;
-    //     friend class DhcpClass;
-    //     friend class DNSClient;
 };
-
-// extern const IPAddress INADDR_NONE;
 
 class String {
     public:
         const char* c_str() const { return nullptr; }
 };
 
-class ESP8266WiFiClass {//: public ESP8266WiFiGenericClass, public ESP8266WiFiSTAClass, public ESP8266WiFiScanClass, public ESP8266WiFiAPClass {
+class ESP8266WiFiClass {
 
     public:
         bool mode(WiFiMode_t);
@@ -112,36 +59,6 @@ class ESP8266WiFiClass {//: public ESP8266WiFiGenericClass, public ESP8266WiFiST
         void persistent(bool persistent);
         IPAddress softAPIP();
         IPAddress localIP();
-
-    // public:
-
-    //     // workaround same function name with different signature
-    //     using ESP8266WiFiGenericClass::channel;
-
-    //     using ESP8266WiFiSTAClass::SSID;
-    //     using ESP8266WiFiSTAClass::RSSI;
-    //     using ESP8266WiFiSTAClass::BSSID;
-    //     using ESP8266WiFiSTAClass::BSSIDstr;
-
-    //     using ESP8266WiFiScanClass::SSID;
-    //     using ESP8266WiFiScanClass::encryptionType;
-    //     using ESP8266WiFiScanClass::RSSI;
-    //     using ESP8266WiFiScanClass::BSSID;
-    //     using ESP8266WiFiScanClass::BSSIDstr;
-    //     using ESP8266WiFiScanClass::channel;
-    //     using ESP8266WiFiScanClass::isHidden;
-
-    //     // ----------------------------------------------------------------------------------------------
-    //     // ------------------------------------------- Debug --------------------------------------------
-    //     // ----------------------------------------------------------------------------------------------
-
-    // public:
-
-    //     void printDiag(Print& dest);
-
-    //     friend class WiFiClient;
-    //     friend class WiFiServer;
-
 };
 
 extern ESP8266WiFiClass WiFi;
