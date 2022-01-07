@@ -1,7 +1,6 @@
 idf_component_register(SRCS "Misc.cpp"
                             "Listener.cpp"
                             "Connection.cpp"
-                            "Listener.cpp"
                             "SocketServer.cpp"
                             "HSPI.cpp"
                        INCLUDE_DIRS ".")
