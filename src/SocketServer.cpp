@@ -42,6 +42,8 @@ extern "C"
 
 #include "esp_attr.h"
 
+#include "esp8266/spi.h"
+
 const unsigned int ONBOARD_LED = 2;					// GPIO 2
 const bool ONBOARD_LED_ON = false;					// active low
 const uint32_t ONBOARD_LED_BLINK_INTERVAL = 500;	// ms
