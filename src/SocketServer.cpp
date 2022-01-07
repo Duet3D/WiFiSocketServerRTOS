@@ -1124,104 +1124,104 @@ void IRAM_ATTR TransferReadyIsr()
 
 void setup()
 {
-	// Enable serial port for debugging
-	Serial.begin(WiFiBaudRate);
-	Serial.setDebugOutput(true);
+// 	// Enable serial port for debugging
+// 	Serial.begin(WiFiBaudRate);
+// 	Serial.setDebugOutput(true);
 
-	// Turn off LED
-	pinMode(ONBOARD_LED, OUTPUT);
-	digitalWrite(ONBOARD_LED, !ONBOARD_LED_ON);
+// 	// Turn off LED
+// 	pinMode(ONBOARD_LED, OUTPUT);
+// 	digitalWrite(ONBOARD_LED, !ONBOARD_LED_ON);
 
-	WiFi.mode(WIFI_OFF);
-	WiFi.persistent(false);
+// 	WiFi.mode(WIFI_OFF);
+// 	WiFi.persistent(false);
 
-	// If we started abnormally, send the exception details to the serial port
-	const rst_info *resetInfo = system_get_rst_info();
-	if (resetInfo->reason != 0 && resetInfo->reason != 6)	// if not power up or external reset
-	{
-		debugPrintfAlways("Restart after exception:%d flag:%d epc1:0x%08x epc2:0x%08x epc3:0x%08x excvaddr:0x%08x depc:0x%08x\n",
-			resetInfo->exccause, resetInfo->reason, resetInfo->epc1, resetInfo->epc2, resetInfo->epc3, resetInfo->excvaddr, resetInfo->depc);
-	}
+// 	// If we started abnormally, send the exception details to the serial port
+// 	const rst_info *resetInfo = system_get_rst_info();
+// 	if (resetInfo->reason != 0 && resetInfo->reason != 6)	// if not power up or external reset
+// 	{
+// 		debugPrintfAlways("Restart after exception:%d flag:%d epc1:0x%08x epc2:0x%08x epc3:0x%08x excvaddr:0x%08x depc:0x%08x\n",
+// 			resetInfo->exccause, resetInfo->reason, resetInfo->epc1, resetInfo->epc2, resetInfo->epc3, resetInfo->excvaddr, resetInfo->depc);
+// 	}
 
-	// Reserve some flash space for use as EEPROM. The maximum EEPROM supported by the core is SPI_FLASH_SEC_SIZE (4Kb).
-	const size_t eepromSizeNeeded = (MaxRememberedNetworks + 1) * sizeof(WirelessConfigurationData);
-	static_assert(eepromSizeNeeded <= SPI_FLASH_SEC_SIZE, "Insufficient EEPROM");
-	EEPROM.begin(eepromSizeNeeded);
+// 	// Reserve some flash space for use as EEPROM. The maximum EEPROM supported by the core is SPI_FLASH_SEC_SIZE (4Kb).
+// 	const size_t eepromSizeNeeded = (MaxRememberedNetworks + 1) * sizeof(WirelessConfigurationData);
+// 	static_assert(eepromSizeNeeded <= SPI_FLASH_SEC_SIZE, "Insufficient EEPROM");
+// 	EEPROM.begin(eepromSizeNeeded);
 
-	// Set up the SPI subsystem
-    pinMode(SamTfrReadyPin, INPUT);
-    pinMode(EspReqTransferPin, OUTPUT);
-    digitalWrite(EspReqTransferPin, LOW);				// not ready to transfer data yet
-    pinMode(SamSSPin, OUTPUT);
-    digitalWrite(SamSSPin, HIGH);
+// 	// Set up the SPI subsystem
+//     pinMode(SamTfrReadyPin, INPUT);
+//     pinMode(EspReqTransferPin, OUTPUT);
+//     digitalWrite(EspReqTransferPin, LOW);				// not ready to transfer data yet
+//     pinMode(SamSSPin, OUTPUT);
+//     digitalWrite(SamSSPin, HIGH);
 
-    // Set up the fast SPI channel
-    hspi.InitMaster(SPI_MODE1, defaultClockControl, true);
+//     // Set up the fast SPI channel
+//     hspi.InitMaster(SPI_MODE1, defaultClockControl, true);
 
-    Connection::Init();
-    Listener::Init();
-#if LWIP_VERSION_MAJOR == 2
-    mdns_resp_init();
-	for (struct netif *item = netif_list; item != nullptr; item = item->next)
-	{
-		mdns_resp_add_netif(item, webHostName, MdnsTtl);
-	}
-    netbiosns_init();
-#else
-    netbios_init();
-#endif
-    lastError = nullptr;
-    debugPrint("Init completed\n");
-	attachInterrupt(SamTfrReadyPin, TransferReadyIsr, CHANGE);
-	whenLastTransactionFinished = millis();
-	lastStatusReportTime = millis();
-	digitalWrite(EspReqTransferPin, HIGH);				// tell the SAM we are ready to receive a command
+//     Connection::Init();
+//     Listener::Init();
+// #if LWIP_VERSION_MAJOR == 2
+//     mdns_resp_init();
+// 	for (struct netif *item = netif_list; item != nullptr; item = item->next)
+// 	{
+// 		mdns_resp_add_netif(item, webHostName, MdnsTtl);
+// 	}
+//     netbiosns_init();
+// #else
+//     netbios_init();
+// #endif
+//     lastError = nullptr;
+//     debugPrint("Init completed\n");
+// 	attachInterrupt(SamTfrReadyPin, TransferReadyIsr, CHANGE);
+// 	whenLastTransactionFinished = millis();
+// 	lastStatusReportTime = millis();
+// 	digitalWrite(EspReqTransferPin, HIGH);				// tell the SAM we are ready to receive a command
 }
 
 void loop()
 {
-	digitalWrite(EspReqTransferPin, HIGH);				// tell the SAM we are ready to receive a command
-	system_soft_wdt_feed();								// kick the watchdog
+	// digitalWrite(EspReqTransferPin, HIGH);				// tell the SAM we are ready to receive a command
+	// system_soft_wdt_feed();								// kick the watchdog
 
-	if (   (lastError != prevLastError || connectErrorChanged || currentState != prevCurrentState)
-		|| ((lastError != nullptr || currentState != lastReportedState) && millis() - lastStatusReportTime > StatusReportMillis)
-	   )
-	{
-		delayMicroseconds(2);							// make sure the pin stays high for long enough for the SAM to see it
-		digitalWrite(EspReqTransferPin, LOW);			// force a low to high transition to signal that an error message is available
-		delayMicroseconds(2);							// make sure it is low enough to create an interrupt when it goes high
-		digitalWrite(EspReqTransferPin, HIGH);			// tell the SAM we are ready to receive a command
-		prevLastError = lastError;
-		prevCurrentState = currentState;
-		connectErrorChanged = false;
-		lastStatusReportTime = millis();
-	}
+	// if (   (lastError != prevLastError || connectErrorChanged || currentState != prevCurrentState)
+	// 	|| ((lastError != nullptr || currentState != lastReportedState) && millis() - lastStatusReportTime > StatusReportMillis)
+	//    )
+	// {
+	// 	delayMicroseconds(2);							// make sure the pin stays high for long enough for the SAM to see it
+	// 	digitalWrite(EspReqTransferPin, LOW);			// force a low to high transition to signal that an error message is available
+	// 	delayMicroseconds(2);							// make sure it is low enough to create an interrupt when it goes high
+	// 	digitalWrite(EspReqTransferPin, HIGH);			// tell the SAM we are ready to receive a command
+	// 	prevLastError = lastError;
+	// 	prevCurrentState = currentState;
+	// 	connectErrorChanged = false;
+	// 	lastStatusReportTime = millis();
+	// }
 
-	// See whether there is a request from the SAM.
-	// Duet WiFi 1.04 and earlier have hardware to ensure that TransferReady goes low when a transaction starts.
-	// Duet 3 Mini doesn't, so we need to see TransferReady go low and then high again. In case that happens so fast that we dn't get the interrupt, we have a timeout.
-	if (digitalRead(SamTfrReadyPin) == HIGH && (transferReadyChanged || millis() - whenLastTransactionFinished > TransferReadyTimeout))
-	{
-		transferReadyChanged = false;
-		ProcessRequest();
-		whenLastTransactionFinished = millis();
-	}
+	// // See whether there is a request from the SAM.
+	// // Duet WiFi 1.04 and earlier have hardware to ensure that TransferReady goes low when a transaction starts.
+	// // Duet 3 Mini doesn't, so we need to see TransferReady go low and then high again. In case that happens so fast that we dn't get the interrupt, we have a timeout.
+	// if (digitalRead(SamTfrReadyPin) == HIGH && (transferReadyChanged || millis() - whenLastTransactionFinished > TransferReadyTimeout))
+	// {
+	// 	transferReadyChanged = false;
+	// 	ProcessRequest();
+	// 	whenLastTransactionFinished = millis();
+	// }
 
-	ConnectPoll();
-	Connection::PollOne();
+	// ConnectPoll();
+	// Connection::PollOne();
 
-	if (currentState == WiFiState::runningAsAccessPoint)
-	{
-		dns.processNextRequest();
-	}
-	else if (	(currentState == WiFiState::autoReconnecting ||
-				 currentState == WiFiState::connecting ||
-				 currentState == WiFiState::reconnecting) &&
-				(millis() - lastBlinkTime > ONBOARD_LED_BLINK_INTERVAL))
-	{
-		lastBlinkTime = millis();
-		digitalWrite(ONBOARD_LED, !digitalRead(ONBOARD_LED));
-	}
+	// if (currentState == WiFiState::runningAsAccessPoint)
+	// {
+	// 	dns.processNextRequest();
+	// }
+	// else if (	(currentState == WiFiState::autoReconnecting ||
+	// 			 currentState == WiFiState::connecting ||
+	// 			 currentState == WiFiState::reconnecting) &&
+	// 			(millis() - lastBlinkTime > ONBOARD_LED_BLINK_INTERVAL))
+	// {
+	// 	lastBlinkTime = millis();
+	// 	digitalWrite(ONBOARD_LED, !digitalRead(ONBOARD_LED));
+	// }
 }
 
 // End
