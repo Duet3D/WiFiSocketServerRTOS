@@ -22,6 +22,10 @@
 #include "HSPI.h"
 #include <cmath>
 
+#include "esp_attr.h"
+
+#include "esp8266/spi.h"
+
 typedef union {
         uint32_t regValue;
         struct {
@@ -87,11 +91,11 @@ void HSPIClass::end() {
 }
 
 // Begin a transaction without changing settings
-void ICACHE_RAM_ATTR HSPIClass::beginTransaction() {
+void IRAM_ATTR HSPIClass::beginTransaction() {
     while(SPI1CMD & SPIBUSY) {}
 }
 
-void ICACHE_RAM_ATTR HSPIClass::endTransaction() {
+void IRAM_ATTR HSPIClass::endTransaction() {
 }
 
 // clockDiv is NOT the required division ratio, it is the value to write to the SPI1CLK register
@@ -123,7 +127,7 @@ void HSPIClass::setDataBits(uint16_t bits)
     SPI1U1 = ((SPI1U1 & mask) | ((bits << SPILMOSI) | (bits << SPILMISO)));
 }
 
-uint32_t ICACHE_RAM_ATTR HSPIClass::transfer32(uint32_t data)
+uint32_t IRAM_ATTR HSPIClass::transfer32(uint32_t data)
 {
     while(SPI1CMD & SPIBUSY) {}
     // Set to 32Bits transfer
@@ -140,7 +144,7 @@ uint32_t ICACHE_RAM_ATTR HSPIClass::transfer32(uint32_t data)
  * @param in  uint32_t *
  * @param size uint32_t
  */
-void ICACHE_RAM_ATTR HSPIClass::transferDwords(const uint32_t * out, uint32_t * in, uint32_t size) {
+void IRAM_ATTR HSPIClass::transferDwords(const uint32_t * out, uint32_t * in, uint32_t size) {
     while(size != 0) {
         if (size > 16) {
             transferDwords_(out, in, 16);
@@ -154,7 +158,7 @@ void ICACHE_RAM_ATTR HSPIClass::transferDwords(const uint32_t * out, uint32_t * 
     }
 }
 
-void ICACHE_RAM_ATTR HSPIClass::transferDwords_(const uint32_t * out, uint32_t * in, uint8_t size) {
+void IRAM_ATTR HSPIClass::transferDwords_(const uint32_t * out, uint32_t * in, uint8_t size) {
     while(SPI1CMD & SPIBUSY) {}
 
     // Set in/out Bits to transfer

@@ -48,5 +48,3 @@ extern EEPROMClass EEPROM;
 #define SPI_FLASH_SEC_SIZE      4096
 
 uint32 spi_flash_get_id(void);
-
-#define SPI1CLK 	0

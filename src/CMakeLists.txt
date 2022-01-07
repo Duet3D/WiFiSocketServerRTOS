@@ -3,6 +3,7 @@ idf_component_register(SRCS "Misc.cpp"
                             "Connection.cpp"
                             "Listener.cpp"
                             "SocketServer.cpp"
+                            "HSPI.cpp"
                        INCLUDE_DIRS ".")
 
 add_subdirectory("stubs")

@@ -1,10 +1,13 @@
 #pragma once
 
+#include <stdint.h>
+
 #define HIGH 0x1
 #define LOW  0x0
 
 #define INPUT             0x00
 #define OUTPUT            0x01
+#define SPECIAL           0xF8
 
 #define CHANGE    0x03
 
