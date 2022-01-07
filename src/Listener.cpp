@@ -9,8 +9,6 @@
 #include "Connection.h"
 #include "Config.h"
 
-#include <HardwareSerial.h>
-
 // C interface functions
 extern "C"
 {
