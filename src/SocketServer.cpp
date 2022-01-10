@@ -1135,14 +1135,6 @@ void setup()
 // 	WiFi.mode(WIFI_OFF);
 // 	WiFi.persistent(false);
 
-// 	// If we started abnormally, send the exception details to the serial port
-// 	const rst_info *resetInfo = system_get_rst_info();
-// 	if (resetInfo->reason != 0 && resetInfo->reason != 6)	// if not power up or external reset
-// 	{
-// 		debugPrintfAlways("Restart after exception:%d flag:%d epc1:0x%08x epc2:0x%08x epc3:0x%08x excvaddr:0x%08x depc:0x%08x\n",
-// 			resetInfo->exccause, resetInfo->reason, resetInfo->epc1, resetInfo->epc2, resetInfo->epc3, resetInfo->excvaddr, resetInfo->depc);
-// 	}
-
 // 	// Reserve some flash space for use as EEPROM. The maximum EEPROM supported by the core is SPI_FLASH_SEC_SIZE (4Kb).
 // 	const size_t eepromSizeNeeded = (MaxRememberedNetworks + 1) * sizeof(WirelessConfigurationData);
 // 	static_assert(eepromSizeNeeded <= SPI_FLASH_SEC_SIZE, "Insufficient EEPROM");
