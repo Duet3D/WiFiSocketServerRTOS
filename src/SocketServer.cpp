@@ -1156,21 +1156,21 @@ void setup()
 
 //     Connection::Init();
 //     Listener::Init();
-// #if LWIP_VERSION_MAJOR == 2
+#if LWIP_VERSION_MAJOR == 2
 //     mdns_resp_init();
-// 	for (struct netif *item = netif_list; item != nullptr; item = item->next)
-// 	{
+	for (struct netif *item = netif_list; item != nullptr; item = item->next)
+	{
 // 		mdns_resp_add_netif(item, webHostName, MdnsTtl);
-// 	}
+	}
 //     netbiosns_init();
-// #else
+#else
 //     netbios_init();
-// #endif
+#endif
     lastError = nullptr;
     debugPrint("Init completed\n");
 // 	attachInterrupt(SamTfrReadyPin, TransferReadyIsr, CHANGE);
-// 	whenLastTransactionFinished = millis();
-// 	lastStatusReportTime = millis();
+	whenLastTransactionFinished = millis();
+	lastStatusReportTime = millis();
 	gpio_set_level(EspReqTransferPin, 1);					// tell the SAM we are ready to receive a command
 }
 
@@ -1179,45 +1179,45 @@ void loop()
 	gpio_set_level(EspReqTransferPin, 1);					// tell the SAM we are ready to receive a command
 	// system_soft_wdt_feed();								// kick the watchdog
 
-	// if (   (lastError != prevLastError || connectErrorChanged || currentState != prevCurrentState)
-	// 	|| ((lastError != nullptr || currentState != lastReportedState) && millis() - lastStatusReportTime > StatusReportMillis)
-	//    )
-	// {
+	if (   (lastError != prevLastError || connectErrorChanged || currentState != prevCurrentState)
+		|| ((lastError != nullptr || currentState != lastReportedState) && millis() - lastStatusReportTime > StatusReportMillis)
+	   )
+	{
 	// 	delayMicroseconds(2);							// make sure the pin stays high for long enough for the SAM to see it
 		gpio_set_level(EspReqTransferPin, 0);			// force a low to high transition to signal that an error message is available
 	// 	delayMicroseconds(2);							// make sure it is low enough to create an interrupt when it goes high
 		gpio_set_level(EspReqTransferPin, 1);			// tell the SAM we are ready to receive a command
-	// 	prevLastError = lastError;
-	// 	prevCurrentState = currentState;
-	// 	connectErrorChanged = false;
-	// 	lastStatusReportTime = millis();
-	// }
+		prevLastError = lastError;
+		prevCurrentState = currentState;
+		connectErrorChanged = false;
+		lastStatusReportTime = millis();
+	}
 
 	// // See whether there is a request from the SAM.
 	// // Duet WiFi 1.04 and earlier have hardware to ensure that TransferReady goes low when a transaction starts.
 	// // Duet 3 Mini doesn't, so we need to see TransferReady go low and then high again. In case that happens so fast that we dn't get the interrupt, we have a timeout.
-	if (gpio_get_level(SamTfrReadyPin) == 1 /* && (transferReadyChanged || millis() - whenLastTransactionFinished > TransferReadyTimeout) */)
+	if (gpio_get_level(SamTfrReadyPin) == 1 && (transferReadyChanged || millis() - whenLastTransactionFinished > TransferReadyTimeout))
 	{
-	// 	transferReadyChanged = false;
+		transferReadyChanged = false;
 	// 	ProcessRequest();
-	// 	whenLastTransactionFinished = millis();
+		whenLastTransactionFinished = millis();
 	}
 
 	// ConnectPoll();
 	// Connection::PollOne();
 
-	// if (currentState == WiFiState::runningAsAccessPoint)
-	// {
+	if (currentState == WiFiState::runningAsAccessPoint)
+	{
 	// 	dns.processNextRequest();
-	// }
-	// else if (	(currentState == WiFiState::autoReconnecting ||
-	// 			 currentState == WiFiState::connecting ||
-	// 			 currentState == WiFiState::reconnecting) &&
-	// 			(millis() - lastBlinkTime > ONBOARD_LED_BLINK_INTERVAL))
-	// {
-	// 	lastBlinkTime = millis();
+	}
+	else if (	(currentState == WiFiState::autoReconnecting ||
+				 currentState == WiFiState::connecting ||
+				 currentState == WiFiState::reconnecting) &&
+				(millis() - lastBlinkTime > ONBOARD_LED_BLINK_INTERVAL))
+	{
+		lastBlinkTime = millis();
 		gpio_set_level(ONBOARD_LED, !gpio_get_level(ONBOARD_LED));
-	// }
+	}
 }
 
 // End

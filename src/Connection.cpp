@@ -7,7 +7,7 @@
 
 #include "Connection.h"
 #include "algorithm"			// for std::min
-#include "Arduino.h"			// for millis
+#include "Misc.h"				// for millis
 #include "Config.h"
 
 #include <cstring> 			// memcpy
