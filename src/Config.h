@@ -19,6 +19,8 @@
 #define VERSION_DEBUG	""
 #endif
 
+#include "driver/gpio.h"
+
 const char* const firmwareVersion = VERSION_MAIN VERSION_DEBUG VERSION_SLEEP;
 
 // Define the maximum length (bytes) of file upload data per SPI packet. Use a multiple of the SD card sector or cluster size for efficiency.
@@ -38,9 +40,9 @@ const uint32_t maxSpiFileData = 2048;
 const uint32_t defaultClockControl = 0x2002;		// 80MHz/3, mark:space 2:1
 
 // Pin numbers
-const int SamSSPin = 15;          // GPIO15, output to SAM, SS pin for SPI transfer
-const int EspReqTransferPin = 0;  // GPIO0, output, indicates to the SAM that we want to send something
-const int SamTfrReadyPin = 4;     // GPIO4, input, indicates that SAM is ready to execute an SPI transaction
+const gpio_num_t SamSSPin = GPIO_NUM_15;          // GPIO15, output to SAM, SS pin for SPI transfer
+const gpio_num_t EspReqTransferPin = GPIO_NUM_0;  // GPIO0, output, indicates to the SAM that we want to send something
+const gpio_num_t SamTfrReadyPin = GPIO_NUM_4;     // GPIO4, input, indicates that SAM is ready to execute an SPI transaction
 
 const uint8_t Backlog = 8;
 

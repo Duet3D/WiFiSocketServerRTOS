@@ -239,7 +239,7 @@ void ConnectPoll()
 
 			debugPrint("Connected to AP\n");
 			currentState = WiFiState::connected;
-			digitalWrite(ONBOARD_LED, ONBOARD_LED_ON);
+			gpio_set_level(ONBOARD_LED, ONBOARD_LED_ON);
 			break;
 
 		default:
@@ -260,7 +260,7 @@ void ConnectPoll()
 			{
 				WiFi.mode(WIFI_OFF);
 				currentState = WiFiState::idle;
-				digitalWrite(ONBOARD_LED, !ONBOARD_LED_ON);
+				gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 			}
 		}
 		break;
@@ -286,7 +286,7 @@ void ConnectPoll()
 			case STATION_WRONG_PASSWORD:
 				error = "state 'wrong password'";
 				currentState = WiFiState::idle;
-				digitalWrite(ONBOARD_LED, !ONBOARD_LED_ON);
+				gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 				break;
 
 			case STATION_NO_AP_FOUND:
@@ -302,7 +302,7 @@ void ConnectPoll()
 			default:
 				error = "unknown WiFi state";
 				currentState = WiFiState::idle;
-				digitalWrite(ONBOARD_LED, !ONBOARD_LED_ON);
+				gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 				break;
 			}
 
@@ -357,7 +357,7 @@ pre(currentState == WiFiState::idle)
 		{
 			lastError = "network scan failed";
 			currentState = WiFiState::idle;
-			digitalWrite(ONBOARD_LED, !ONBOARD_LED_ON);
+			gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 			return;
 		}
 
@@ -495,7 +495,7 @@ void StartAccessPoint()
 			}
 			SafeStrncpy(currentSsid, apData.ssid, ARRAY_SIZE(currentSsid));
 			currentState = WiFiState::runningAsAccessPoint;
-			digitalWrite(ONBOARD_LED, ONBOARD_LED_ON);
+			gpio_set_level(ONBOARD_LED, ONBOARD_LED_ON);
 #if LWIP_VERSION_MAJOR == 2
 			mdns_resp_netif_settings_changed(netif_list->next);		// AP is on second interface
 #else
@@ -508,7 +508,7 @@ void StartAccessPoint()
 			lastError = "Failed to start access point";
 			debugPrintf("%s\n", lastError);
 			currentState = WiFiState::idle;
-			digitalWrite(ONBOARD_LED, !ONBOARD_LED_ON);
+			gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 		}
 	}
 	else
@@ -516,7 +516,7 @@ void StartAccessPoint()
 		lastError = "invalid access point configuration";
 		debugPrintf("%s\n", lastError);
 		currentState = WiFiState::idle;
-		digitalWrite(ONBOARD_LED, !ONBOARD_LED_ON);
+		gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 	}
 }
 
@@ -641,7 +641,7 @@ void IRAM_ATTR ProcessRequest()
 	bool deferCommand = false;
 
 	// Begin the transaction
-	digitalWrite(SamSSPin, LOW);            // assert CS to SAM
+	gpio_set_level(SamSSPin, 0);             // assert CS to SAM
 	hspi.beginTransaction();
 
 	// Exchange headers, except for the last dword which will contain our response
@@ -1042,7 +1042,7 @@ void IRAM_ATTR ProcessRequest()
 		}
 	}
 
-	digitalWrite(SamSSPin, HIGH);     						// de-assert CS to SAM to end the transaction and tell SAM the transfer is complete
+	gpio_set_level(SamSSPin, 1);             // de-assert CS to SAM to end the transaction and tell SAM the transfer is complete
 	hspi.endTransaction();
 
 	// If we deferred the command until after sending the response (e.g. because it may take some time to execute), complete it now
@@ -1097,7 +1097,7 @@ void IRAM_ATTR ProcessRequest()
 			}
 			delay(100);
 			currentState = WiFiState::idle;
-			digitalWrite(ONBOARD_LED, !ONBOARD_LED_ON);
+			gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 			break;
 
 		case NetworkCommand::networkFactoryReset:			// clear remembered list, reset factory defaults
@@ -1140,15 +1140,19 @@ void setup()
 // 	static_assert(eepromSizeNeeded <= SPI_FLASH_SEC_SIZE, "Insufficient EEPROM");
 // 	EEPROM.begin(eepromSizeNeeded);
 
-// 	// Set up the SPI subsystem
-//     pinMode(SamTfrReadyPin, INPUT);
-//     pinMode(EspReqTransferPin, OUTPUT);
-//     digitalWrite(EspReqTransferPin, LOW);				// not ready to transfer data yet
-//     pinMode(SamSSPin, OUTPUT);
-//     digitalWrite(SamSSPin, HIGH);
+	// Set up the SPI subsystem
+    gpio_reset_pin(SamTfrReadyPin);
+    gpio_set_direction(SamTfrReadyPin, GPIO_MODE_INPUT);
 
-//     // Set up the fast SPI channel
-//     hspi.InitMaster(SPI_MODE1, defaultClockControl, true);
+    gpio_reset_pin(EspReqTransferPin);
+    gpio_set_direction(EspReqTransferPin, GPIO_MODE_OUTPUT);
+	gpio_set_level(EspReqTransferPin, 0);
+
+    gpio_reset_pin(SamSSPin);
+	gpio_set_level(SamSSPin, 1);
+
+    // // Set up the fast SPI channel
+    // hspi.InitMaster(SPI_MODE1, defaultClockControl, true);
 
 //     Connection::Init();
 //     Listener::Init();
@@ -1162,17 +1166,17 @@ void setup()
 // #else
 //     netbios_init();
 // #endif
-//     lastError = nullptr;
-//     debugPrint("Init completed\n");
+    lastError = nullptr;
+    debugPrint("Init completed\n");
 // 	attachInterrupt(SamTfrReadyPin, TransferReadyIsr, CHANGE);
 // 	whenLastTransactionFinished = millis();
 // 	lastStatusReportTime = millis();
-// 	digitalWrite(EspReqTransferPin, HIGH);				// tell the SAM we are ready to receive a command
+	gpio_set_level(EspReqTransferPin, 1);					// tell the SAM we are ready to receive a command
 }
 
 void loop()
 {
-	// digitalWrite(EspReqTransferPin, HIGH);				// tell the SAM we are ready to receive a command
+	gpio_set_level(EspReqTransferPin, 1);					// tell the SAM we are ready to receive a command
 	// system_soft_wdt_feed();								// kick the watchdog
 
 	// if (   (lastError != prevLastError || connectErrorChanged || currentState != prevCurrentState)
@@ -1180,9 +1184,9 @@ void loop()
 	//    )
 	// {
 	// 	delayMicroseconds(2);							// make sure the pin stays high for long enough for the SAM to see it
-	// 	digitalWrite(EspReqTransferPin, LOW);			// force a low to high transition to signal that an error message is available
+		gpio_set_level(EspReqTransferPin, 0);			// force a low to high transition to signal that an error message is available
 	// 	delayMicroseconds(2);							// make sure it is low enough to create an interrupt when it goes high
-	// 	digitalWrite(EspReqTransferPin, HIGH);			// tell the SAM we are ready to receive a command
+		gpio_set_level(EspReqTransferPin, 1);			// tell the SAM we are ready to receive a command
 	// 	prevLastError = lastError;
 	// 	prevCurrentState = currentState;
 	// 	connectErrorChanged = false;
@@ -1192,12 +1196,12 @@ void loop()
 	// // See whether there is a request from the SAM.
 	// // Duet WiFi 1.04 and earlier have hardware to ensure that TransferReady goes low when a transaction starts.
 	// // Duet 3 Mini doesn't, so we need to see TransferReady go low and then high again. In case that happens so fast that we dn't get the interrupt, we have a timeout.
-	// if (digitalRead(SamTfrReadyPin) == HIGH && (transferReadyChanged || millis() - whenLastTransactionFinished > TransferReadyTimeout))
-	// {
+	if (gpio_get_level(SamTfrReadyPin) == 1 /* && (transferReadyChanged || millis() - whenLastTransactionFinished > TransferReadyTimeout) */)
+	{
 	// 	transferReadyChanged = false;
 	// 	ProcessRequest();
 	// 	whenLastTransactionFinished = millis();
-	// }
+	}
 
 	// ConnectPoll();
 	// Connection::PollOne();
@@ -1212,7 +1216,7 @@ void loop()
 	// 			(millis() - lastBlinkTime > ONBOARD_LED_BLINK_INTERVAL))
 	// {
 	// 	lastBlinkTime = millis();
-	// 	digitalWrite(ONBOARD_LED, !digitalRead(ONBOARD_LED));
+		gpio_set_level(ONBOARD_LED, !gpio_get_level(ONBOARD_LED));
 	// }
 }
 
