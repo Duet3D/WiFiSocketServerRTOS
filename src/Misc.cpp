@@ -1,6 +1,8 @@
 #include "Misc.h"
 #include <cstring>
 
+#include "esp_timer.h"
+
 // Version of strncpy that ensures the result is null terminated
 void SafeStrncpy(char *dst, const char *src, size_t length)
 {
@@ -15,6 +17,11 @@ void SafeStrncat(char *dst, const char *src, size_t length)
 	const size_t index = strlen(dst);
 	strncat(dst + index, src, length - index);
 	dst[length - 1] = 0;
+}
+
+extern "C" unsigned long millis()
+{
+    return (unsigned long) (esp_timer_get_time() / 1000ULL);
 }
 
 // End
