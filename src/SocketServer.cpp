@@ -43,6 +43,7 @@ extern "C"
 #include "esp_system.h"
 #include "esp_attr.h"
 
+#include "rom/ets_sys.h"
 #include "driver/gpio.h"
 
 #include "esp8266/spi.h"
@@ -1183,9 +1184,9 @@ void loop()
 		|| ((lastError != nullptr || currentState != lastReportedState) && millis() - lastStatusReportTime > StatusReportMillis)
 	   )
 	{
-	// 	delayMicroseconds(2);							// make sure the pin stays high for long enough for the SAM to see it
+	 	ets_delay_us(2);									// make sure the pin stays high for long enough for the SAM to see it
 		gpio_set_level(EspReqTransferPin, 0);			// force a low to high transition to signal that an error message is available
-	// 	delayMicroseconds(2);							// make sure it is low enough to create an interrupt when it goes high
+		ets_delay_us(2);									// make sure it is low enough to create an interrupt when it goes high
 		gpio_set_level(EspReqTransferPin, 1);			// tell the SAM we are ready to receive a command
 		prevLastError = lastError;
 		prevCurrentState = currentState;

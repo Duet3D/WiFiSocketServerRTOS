@@ -18,4 +18,6 @@ void SafeStrncat(char *dst, const char *src, size_t length);
 
 extern "C" unsigned long millis();
 
+void delay(unsigned long);
+
 #endif /* SRC_MISC_H_ */

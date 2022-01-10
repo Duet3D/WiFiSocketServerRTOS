@@ -1,6 +1,9 @@
 #include "Misc.h"
 #include <cstring>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 #include "esp_timer.h"
 
 // Version of strncpy that ensures the result is null terminated
@@ -22,6 +25,11 @@ void SafeStrncat(char *dst, const char *src, size_t length)
 extern "C" unsigned long millis()
 {
     return (unsigned long) (esp_timer_get_time() / 1000ULL);
+}
+
+void delay(uint32_t ms)
+{
+    vTaskDelay(ms / portTICK_PERIOD_MS);
 }
 
 // End
