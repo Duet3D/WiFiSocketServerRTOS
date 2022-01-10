@@ -21,12 +21,3 @@ void delay(unsigned long);
 
 extern "C" unsigned long millis();
 void delayMicroseconds(unsigned int us);
-
-
-class HardwareSerial {
-    public:
-        void begin(unsigned long baud) {}
-        void setDebugOutput(bool);
-};
-
-extern HardwareSerial Serial;
