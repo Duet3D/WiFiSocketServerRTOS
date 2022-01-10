@@ -11,6 +11,3 @@
 
 void attachInterrupt(uint8_t pin, void (*)(void), int mode);
 void pinMode(uint8_t pin, uint8_t mode);
-void delay(unsigned long);
-
-void delayMicroseconds(unsigned int us);
