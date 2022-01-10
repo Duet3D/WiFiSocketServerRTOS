@@ -40,11 +40,15 @@ extern "C"
 #include <cstring>
 #include <algorithm>
 
+#include "esp_system.h"
 #include "esp_attr.h"
 
-#include "esp8266/spi.h"
+#include "driver/gpio.h"
 
-const unsigned int ONBOARD_LED = 2;					// GPIO 2
+#include "esp8266/spi.h"
+#include "esp8266/gpio.h"
+
+const gpio_num_t ONBOARD_LED = GPIO_NUM_2;			// GPIO 2
 const bool ONBOARD_LED_ON = false;					// active low
 const uint32_t ONBOARD_LED_BLINK_INTERVAL = 500;	// ms
 const uint32_t TransferReadyTimeout = 10;			// how many milliseconds we allow for the Duet to set TransferReady low after the end of a transaction, before we assume that we missed seeing it
@@ -1124,13 +1128,9 @@ void IRAM_ATTR TransferReadyIsr()
 
 void setup()
 {
-// 	// Enable serial port for debugging
-// 	Serial.begin(WiFiBaudRate);
-// 	Serial.setDebugOutput(true);
-
-// 	// Turn off LED
-// 	pinMode(ONBOARD_LED, OUTPUT);
-// 	digitalWrite(ONBOARD_LED, !ONBOARD_LED_ON);
+    gpio_reset_pin(ONBOARD_LED);
+    gpio_set_direction(ONBOARD_LED, GPIO_MODE_OUTPUT);
+	gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 
 // 	WiFi.mode(WIFI_OFF);
 // 	WiFi.persistent(false);
