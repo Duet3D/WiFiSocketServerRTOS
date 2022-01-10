@@ -42,6 +42,7 @@ extern "C"
 
 #include "esp_system.h"
 #include "esp_attr.h"
+#include "esp_intr_alloc.h"
 
 #include "rom/ets_sys.h"
 #include "driver/gpio.h"
@@ -1122,7 +1123,7 @@ void IRAM_ATTR ProcessRequest()
 	}
 }
 
-void IRAM_ATTR TransferReadyIsr()
+void IRAM_ATTR TransferReadyIsr(void *)
 {
 	transferReadyChanged = true;
 }
@@ -1169,7 +1170,8 @@ void setup()
 #endif
     lastError = nullptr;
     debugPrint("Init completed\n");
-// 	attachInterrupt(SamTfrReadyPin, TransferReadyIsr, CHANGE);
+	gpio_install_isr_service(ESP_INTR_FLAG_IRAM | ESP_INTR_FLAG_EDGE);
+	gpio_isr_handler_add(SamTfrReadyPin, TransferReadyIsr, nullptr);
 	whenLastTransactionFinished = millis();
 	lastStatusReportTime = millis();
 	gpio_set_level(EspReqTransferPin, 1);					// tell the SAM we are ready to receive a command
