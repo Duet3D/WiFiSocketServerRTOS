@@ -40,6 +40,11 @@ extern "C"
 #include <cstring>
 #include <algorithm>
 
+extern "C"
+{
+	#include "esp_task_wdt.h"
+}
+
 #include "esp_system.h"
 #include "esp_attr.h"
 #include "esp_intr_alloc.h"
@@ -1175,12 +1180,13 @@ void setup()
 	whenLastTransactionFinished = millis();
 	lastStatusReportTime = millis();
 	gpio_set_level(EspReqTransferPin, 1);					// tell the SAM we are ready to receive a command
+	currentState = WiFiState::autoReconnecting;
 }
 
 void loop()
 {
 	gpio_set_level(EspReqTransferPin, 1);					// tell the SAM we are ready to receive a command
-	// system_soft_wdt_feed();								// kick the watchdog
+	esp_task_wdt_reset();								    // kick the watchdog
 
 	if (   (lastError != prevLastError || connectErrorChanged || currentState != prevCurrentState)
 		|| ((lastError != nullptr || currentState != lastReportedState) && millis() - lastStatusReportTime > StatusReportMillis)
