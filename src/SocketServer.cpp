@@ -1156,6 +1156,7 @@ void setup()
 	gpio_set_level(EspReqTransferPin, 0);
 
     gpio_reset_pin(SamSSPin);
+    gpio_set_direction(SamSSPin, GPIO_MODE_OUTPUT);
 	gpio_set_level(SamSSPin, 1);
 
     // // Set up the fast SPI channel
