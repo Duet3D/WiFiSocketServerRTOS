@@ -25,6 +25,8 @@
 #include "esp_attr.h"
 
 #include "esp8266/spi.h"
+#include "esp8266/gpio.h"
+
 
 typedef union {
         uint32_t regValue;
@@ -42,9 +44,17 @@ HSPIClass::HSPIClass() {
 
 void HSPIClass::InitMaster(uint8_t mode, uint32_t clockReg, bool msbFirst)
 {
-	pinMode(SCK, SPECIAL);  ///< GPIO14
-	pinMode(MISO, SPECIAL); ///< GPIO12
-	pinMode(MOSI, SPECIAL); ///< GPIO13
+    gpio_reset_pin(SCK);
+    PIN_PULLUP_EN(PERIPHS_IO_MUX_MTMS_U);
+    PIN_FUNC_SELECT(PERIPHS_IO_MUX_MTMS_U, FUNC_HSPI_CLK);
+
+    gpio_reset_pin(MOSI);
+    PIN_PULLUP_EN(PERIPHS_IO_MUX_MTCK_U);
+    PIN_FUNC_SELECT(PERIPHS_IO_MUX_MTCK_U, FUNC_HSPID_MOSI);
+
+    gpio_reset_pin(MISO);
+    PIN_PULLUP_EN(PERIPHS_IO_MUX_MTDI_U);
+    PIN_FUNC_SELECT(PERIPHS_IO_MUX_MTDI_U, FUNC_HSPIQ_MISO);
 
 	SPI1C = (msbFirst) ? 0 : SPICWBO | SPICRBO;
 
@@ -85,9 +95,16 @@ void HSPIClass::InitMaster(uint8_t mode, uint32_t clockReg, bool msbFirst)
 }
 
 void HSPIClass::end() {
-    pinMode(SCK, INPUT);
-    pinMode(MISO, INPUT);
-    pinMode(MOSI, INPUT);
+    // Select GPIO pin function and reset
+    PIN_FUNC_SELECT(PERIPHS_IO_MUX_MTDI_U, FUNC_GPIO12);
+    gpio_reset_pin(MISO);
+    gpio_set_direction(MISO, GPIO_MODE_INPUT);
+    PIN_FUNC_SELECT(PERIPHS_IO_MUX_MTCK_U, FUNC_GPIO13);
+    gpio_reset_pin(MOSI);
+    gpio_set_direction(MOSI, GPIO_MODE_INPUT);
+    PIN_FUNC_SELECT(PERIPHS_IO_MUX_MTMS_U, FUNC_GPIO14);
+    gpio_reset_pin(SCK);
+    gpio_set_direction(SCK, GPIO_MODE_INPUT);
 }
 
 // Begin a transaction without changing settings

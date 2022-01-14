@@ -1,8 +1,10 @@
 #pragma once
 
-static const uint8_t SCK   = 14;
-static const uint8_t MOSI  = 13;
-static const uint8_t MISO  = 12;
+#include "driver/gpio.h"
+
+static const gpio_num_t SCK   = GPIO_NUM_14;
+static const gpio_num_t MOSI  = GPIO_NUM_13;
+static const gpio_num_t MISO  = GPIO_NUM_12;
 
 #define ESP8266_REG(addr) *((volatile uint32_t *)(0x60000000+(addr)))
 

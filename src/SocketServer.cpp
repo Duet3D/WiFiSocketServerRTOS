@@ -1159,8 +1159,8 @@ void setup()
     gpio_set_direction(SamSSPin, GPIO_MODE_OUTPUT);
 	gpio_set_level(SamSSPin, 1);
 
-    // // Set up the fast SPI channel
-    // hspi.InitMaster(SPI_MODE1, defaultClockControl, true);
+    // Set up the fast SPI channel
+    hspi.InitMaster(SPI_MODE1, defaultClockControl, true);
 
 //     Connection::Init();
 //     Listener::Init();
