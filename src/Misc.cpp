@@ -27,7 +27,7 @@ extern "C" unsigned long millis()
 	return (unsigned long) (esp_timer_get_time() / 1000ULL);
 }
 
-void delay(uint32_t ms)
+void delay(unsigned long ms)
 {
 	vTaskDelay(ms / portTICK_PERIOD_MS);
 }
