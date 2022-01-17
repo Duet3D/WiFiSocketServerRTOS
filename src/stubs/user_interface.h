@@ -37,7 +37,6 @@ bool wifi_station_set_hostname(char *name);
 bool wifi_set_sleep_type(sleep_type_t type);
 station_status_t wifi_station_get_connect_status(void);
 phy_mode_t wifi_get_phy_mode(void);
-void system_soft_wdt_feed(void);
 
 uint32 system_get_free_heap_size(void);
 struct rst_info* system_get_rst_info(void);
