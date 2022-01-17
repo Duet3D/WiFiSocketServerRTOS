@@ -17,11 +17,11 @@ class DNSServer
 {
   public:
     DNSServer() { };
-    void processNextRequest();
-    void setErrorReplyCode(const DNSReplyCode &replyCode);
+    void processNextRequest() {} ;
+    void setErrorReplyCode(const DNSReplyCode &replyCode) {};
     bool start(const uint16_t &port,
               const char* domainName,
-              const IPAddress &resolvedIP);
-    void stop();
+              const IPAddress &resolvedIP) {return false;}
+    void stop() {};
 };
 

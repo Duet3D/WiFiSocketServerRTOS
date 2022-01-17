@@ -21,10 +21,10 @@ typedef enum {
 	PHY_MODE_11N    = 3
 } phy_mode_t;
 
-bool wifi_station_set_hostname(char *name);
-bool wifi_set_sleep_type(sleep_type_t type);
-station_status_t wifi_station_get_connect_status(void);
-phy_mode_t wifi_get_phy_mode(void);
+static bool wifi_station_set_hostname(char *name) { return false; };
+static bool wifi_set_sleep_type(sleep_type_t type) { return false; };
+static station_status_t wifi_station_get_connect_status(void) { return STATION_IDLE; };
+static phy_mode_t wifi_get_phy_mode(void) {return PHY_MODE_11B; };
 
 #define STATION_IF      0x00
 #define SOFTAP_IF       0x01
@@ -33,10 +33,10 @@ typedef signed char         sint8;
 typedef unsigned short      uint16;
 typedef unsigned char       uint8;
 
-sint8 wifi_station_get_rssi(void);
-sleep_type_t wifi_get_sleep_type(void);
-uint16 system_get_vdd33(void);
-bool wifi_get_macaddr(uint8 if_index, uint8 *macaddr);
+static sint8 wifi_station_get_rssi(void) {return 0;};
+static sleep_type_t wifi_get_sleep_type(void) {return NONE_SLEEP_T; };
+static uint16 system_get_vdd33(void) {return 0;};
+static bool wifi_get_macaddr(uint8 if_index, uint8 *macaddr) {return false;};
 
-void system_phy_set_max_tpw(uint8 max_tpw);
-uint8 wifi_softap_get_station_num(void);
+static void system_phy_set_max_tpw(uint8 max_tpw) {};
+static uint8 wifi_softap_get_station_num(void) { return 0; };
