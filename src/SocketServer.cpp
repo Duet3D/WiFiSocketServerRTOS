@@ -26,7 +26,6 @@ extern "C"
 #include <cstdarg>
 #include <ESP8266WiFi.h>
 #include <DNSServer.h>
-#include <EEPROM.h>
 #include "SocketServer.h"
 #include "Config.h"
 #include "PooledStrings.h"
@@ -719,7 +718,7 @@ void IRAM_ATTR ProcessRequest()
 											  : 0;
 				response->freeHeap = system_get_free_heap_size();
 				response->resetReason = system_get_rst_info()->reason;
-				response->flashSize = 1u << ((spi_flash_get_id() >> 16) & 0xFF);
+				response->flashSize = spi_flash_get_chip_size();
 				response->rssi = (runningAsStation) ? wifi_station_get_rssi() : 0;
 				response->numClients = (runningAsAp) ? wifi_softap_get_station_num() : 0;
 				response->sleepMode = (uint8_t)wifi_get_sleep_type() + 1;
