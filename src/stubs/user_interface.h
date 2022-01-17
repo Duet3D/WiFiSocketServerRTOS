@@ -21,25 +21,10 @@ typedef enum {
 	PHY_MODE_11N    = 3
 } phy_mode_t;
 
-typedef unsigned int        uint32;
-
-struct rst_info{
-	uint32 reason;
-	uint32 exccause;
-	uint32 epc1;
-	uint32 epc2;
-	uint32 epc3;
-	uint32 excvaddr;
-	uint32 depc;
-};
-
 bool wifi_station_set_hostname(char *name);
 bool wifi_set_sleep_type(sleep_type_t type);
 station_status_t wifi_station_get_connect_status(void);
 phy_mode_t wifi_get_phy_mode(void);
-
-uint32 system_get_free_heap_size(void);
-struct rst_info* system_get_rst_info(void);
 
 #define STATION_IF      0x00
 #define SOFTAP_IF       0x01

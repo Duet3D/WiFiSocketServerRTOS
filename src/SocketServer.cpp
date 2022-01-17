@@ -716,8 +716,40 @@ void IRAM_ATTR ProcessRequest()
 										: (runningAsStation)
 										  ? static_cast<uint32_t>(WiFi.localIP())
 											  : 0;
-				response->freeHeap = system_get_free_heap_size();
-				response->resetReason = system_get_rst_info()->reason;
+				response->freeHeap = esp_get_free_heap_size();
+
+				switch (esp_reset_reason())
+				{
+				case ESP_RST_POWERON:
+					response->resetReason = 0;
+					break;
+				case ESP_RST_INT_WDT:
+				case ESP_RST_WDT:
+				case ESP_RST_BROWNOUT:
+					response->resetReason = 1;
+					break;
+				case ESP_RST_PANIC:
+				case ESP_RST_UNKNOWN:
+					response->resetReason = 2;
+					break;
+				case ESP_RST_TASK_WDT:
+					response->resetReason = 3;
+					break;
+				case ESP_RST_SW:
+				case ESP_RST_FAST_SW:
+					response->resetReason = 4;
+					break;
+				case ESP_RST_DEEPSLEEP:
+					response->resetReason = 5;
+					break;
+				case ESP_RST_EXT:
+					response->resetReason = 6;
+					break;
+				
+				default:
+					break;
+				}
+
 				response->flashSize = spi_flash_get_chip_size();
 				response->rssi = (runningAsStation) ? wifi_station_get_rssi() : 0;
 				response->numClients = (runningAsAp) ? wifi_softap_get_station_num() : 0;
