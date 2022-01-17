@@ -21,7 +21,6 @@ typedef enum {
 	PHY_MODE_11N    = 3
 } phy_mode_t;
 
-static bool wifi_station_set_hostname(char *name) { return false; };
 static bool wifi_set_sleep_type(sleep_type_t type) { return false; };
 static station_status_t wifi_station_get_connect_status(void) { return STATION_IDLE; };
 static phy_mode_t wifi_get_phy_mode(void) {return PHY_MODE_11B; };

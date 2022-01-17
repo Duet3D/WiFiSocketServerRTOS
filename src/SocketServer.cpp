@@ -160,9 +160,23 @@ pre(currentState == NetworkState::idle)
 {
 	SafeStrncpy(currentSsid, apData.ssid, ARRAY_SIZE(currentSsid));
 
-	WiFi.mode(WIFI_STA);
-	wifi_station_set_hostname(webHostName);     				// must do this before calling WiFi.begin()
-	WiFi.setAutoConnect(false);
+	ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA) );
+	tcpip_adapter_set_hostname(TCPIP_ADAPTER_IF_STA, webHostName);
+
+	wifi_config_t wifi_config;
+	memcpy(wifi_config.sta.ssid, apData.ssid, sizeof(wifi_config.sta.ssid));
+	memcpy(wifi_config.sta.password, apData.password, sizeof(wifi_config.sta.password));
+	ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config) );
+
+	tcpip_adapter_ip_info_t ip_info;
+	ip_info.ip.addr = apData.ip;
+	ip_info.gw.addr = apData.gateway;
+	ip_info.netmask.addr = apData.netmask;
+	tcpip_adapter_set_ip_info(TCPIP_ADAPTER_IF_STA, &ip_info);
+
+	debugPrintf("Trying to connect to ssid \"%s\" with password \"%s\"\n", apData.ssid, apData.password);
+	ESP_ERROR_CHECK(esp_wifi_start() );
+
 //	WiFi.setAutoReconnect(false);								// auto reconnect NEVER works in our configuration so disable it, it just wastes time
 	WiFi.setAutoReconnect(true);
 #if NO_WIFI_SLEEP
@@ -170,9 +184,6 @@ pre(currentState == NetworkState::idle)
 #else
 	wifi_set_sleep_type(MODEM_SLEEP_T);
 #endif
-	WiFi.config(IPAddress(apData.ip), IPAddress(apData.gateway), IPAddress(apData.netmask), IPAddress(), IPAddress());
-	debugPrintf("Trying to connect to ssid \"%s\" with password \"%s\"\n", apData.ssid, apData.password);
-	WiFi.begin(apData.ssid, apData.password);
 
 	if (isRetry)
 	{
@@ -259,7 +270,7 @@ void ConnectPoll()
 
 			if (!retry)
 			{
-				WiFi.mode(WIFI_OFF);
+				esp_wifi_stop();
 				currentState = WiFiState::idle;
 				gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 			}
@@ -462,17 +473,27 @@ void StartAccessPoint()
 
 	if (ValidApData(apData))
 	{
+		esp_err_t res = esp_wifi_set_mode(WIFI_MODE_AP);
+
 		SafeStrncpy(currentSsid, apData.ssid, ARRAY_SIZE(currentSsid));
-		bool ok = WiFi.mode(WIFI_AP);
-		if (ok)
+		if (res == ESP_OK)
 		{
-			IPAddress apIP(apData.ip);
-			ok = WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
-			if (ok)
+			tcpip_adapter_ip_info_t ip_info;
+			ip_info.ip.addr = apData.ip;
+			ip_info.gw.addr = apData.ip;
+			ip_info.netmask = IPADDR4_INIT_BYTES(255, 255, 255, 0);
+			res = tcpip_adapter_set_ip_info(TCPIP_ADAPTER_IF_AP, &ip_info);
+
+			if (res == ESP_OK)
 			{
+				wifi_config_t wifi_config;
+				memcpy(wifi_config.ap.ssid, currentSsid, sizeof(wifi_config.ap.ssid));
+				memcpy(wifi_config.ap.password, apData.password, sizeof(wifi_config.ap.password));
+				wifi_config.ap.channel = (apData.channel == 0) ? DefaultWiFiChannel : apData.channel;
+				ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_AP, &wifi_config) );
 				debugPrintf("Starting AP %s with password \"%s\"\n", currentSsid, apData.password);
-				ok = WiFi.softAP(currentSsid, apData.password, (apData.channel == 0) ? DefaultWiFiChannel : apData.channel);
-				if (!ok)
+				res = esp_wifi_start();
+				if (res != ESP_OK)
 				{
 					debugPrintAlways("Failed to start AP\n");
 				}
@@ -487,7 +508,7 @@ void StartAccessPoint()
 			debugPrintAlways("Failed to set AP mode\n");
 		}
 
-		if (ok)
+		if (res == ESP_OK)
 		{
 			debugPrintAlways("AP started\n");
 			dns.setErrorReplyCode(DNSReplyCode::NoError);
@@ -507,7 +528,7 @@ void StartAccessPoint()
 		}
 		else
 		{
-			WiFi.mode(WIFI_OFF);
+			esp_wifi_stop();
 			lastError = "Failed to start access point";
 			debugPrintf("%s\n", lastError);
 			currentState = WiFiState::idle;
@@ -1137,13 +1158,13 @@ void IRAM_ATTR ProcessRequest()
 // 				MDNS.deleteServices();
 // #endif
 				delay(20);									// try to give lwip time to recover from stopping everything
-				WiFi.disconnect(true);
+				esp_wifi_disconnect();
 				break;
 
 			case WiFiState::runningAsAccessPoint:
 				dns.stop();
 				delay(20);									// try to give lwip time to recover from stopping everything
-				WiFi.softAPdisconnect(true);
+				esp_wifi_disconnect();
 				break;
 
 			default:

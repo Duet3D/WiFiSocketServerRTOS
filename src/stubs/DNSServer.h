@@ -21,7 +21,7 @@ class DNSServer
     void setErrorReplyCode(const DNSReplyCode &replyCode) {};
     bool start(const uint16_t &port,
               const char* domainName,
-              const IPAddress &resolvedIP) {return false;}
+              const uint32_t &resolvedIP) {return false;}
     void stop() {};
 };
 
