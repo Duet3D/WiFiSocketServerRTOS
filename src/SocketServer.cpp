@@ -44,6 +44,8 @@ extern "C"
 	#include "esp_task_wdt.h"
 }
 
+#include "esp_netif.h"
+#include "esp_wifi.h"
 #include "esp_system.h"
 #include "esp_attr.h"
 #include "esp_intr_alloc.h"
@@ -1169,8 +1171,10 @@ void setup()
 	gpio_set_direction(ONBOARD_LED, GPIO_MODE_OUTPUT);
 	gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 
-// 	WiFi.mode(WIFI_OFF);
-// 	WiFi.persistent(false);
+    tcpip_adapter_init();
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
 
 	ssids = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, 
 													 ESP_PARTITION_SUBTYPE_DATA_NVS, 
