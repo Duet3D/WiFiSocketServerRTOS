@@ -33,10 +33,7 @@ typedef signed char         sint8;
 typedef unsigned short      uint16;
 typedef unsigned char       uint8;
 
-static sint8 wifi_station_get_rssi(void) {return 0;};
 static sleep_type_t wifi_get_sleep_type(void) {return NONE_SLEEP_T; };
 static uint16 system_get_vdd33(void) {return 0;};
-static bool wifi_get_macaddr(uint8 if_index, uint8 *macaddr) {return false;};
 
 static void system_phy_set_max_tpw(uint8 max_tpw) {};
-static uint8 wifi_softap_get_station_num(void) { return 0; };

@@ -713,11 +713,6 @@ void IRAM_ATTR ProcessRequest()
 				const bool runningAsAp = (currentState == WiFiState::runningAsAccessPoint);
 				const bool runningAsStation = (currentState == WiFiState::connected);
 				NetworkStatusResponse * const response = reinterpret_cast<NetworkStatusResponse*>(transferBuffer);
-				response->ipAddress = (runningAsAp)
-										? static_cast<uint32_t>(WiFi.softAPIP())
-										: (runningAsStation)
-										  ? static_cast<uint32_t>(WiFi.localIP())
-											  : 0;
 				response->freeHeap = esp_get_free_heap_size();
 
 				switch (esp_reset_reason())
@@ -752,15 +747,35 @@ void IRAM_ATTR ProcessRequest()
 					break;
 				}
 
+				if (runningAsStation) {
+					wifi_ap_record_t ap_info;
+					esp_wifi_sta_get_ap_info(&ap_info);
+					response->rssi = ap_info.rssi; 
+					response->numClients = 0;
+					esp_wifi_get_mac(WIFI_IF_STA, response->macAddress);
+					tcpip_adapter_ip_info_t ip_info;
+					tcpip_adapter_get_ip_info(TCPIP_ADAPTER_IF_STA, &ip_info);
+					response->ipAddress = ip_info.ip.addr;
+				} else if (runningAsAp) {
+					wifi_sta_list_t sta_list;
+					esp_wifi_ap_get_sta_list(&sta_list);
+
+					response->numClients = sta_list.num; 
+					response->rssi = 0;
+					esp_wifi_get_mac(WIFI_IF_AP, response->macAddress);
+					tcpip_adapter_ip_info_t ip_info;
+					tcpip_adapter_get_ip_info(TCPIP_ADAPTER_IF_AP, &ip_info);
+					response->ipAddress = ip_info.ip.addr;
+				} else {
+					response->ipAddress = 0;
+				}
+
 				response->flashSize = spi_flash_get_chip_size();
-				response->rssi = (runningAsStation) ? wifi_station_get_rssi() : 0;
-				response->numClients = (runningAsAp) ? wifi_softap_get_station_num() : 0;
 				response->sleepMode = (uint8_t)wifi_get_sleep_type() + 1;
 				response->phyMode = (uint8_t)wifi_get_phy_mode();
 				response->zero1 = 0;
 				response->zero2 = 0;
 				response->vcc = system_get_vdd33();
-			    wifi_get_macaddr((runningAsAp) ? SOFTAP_IF : STATION_IF, response->macAddress);
 			    SafeStrncpy(response->versionText, firmwareVersion, sizeof(response->versionText));
 			    SafeStrncpy(response->hostName, webHostName, sizeof(response->hostName));
 			    SafeStrncpy(response->ssid, currentSsid, sizeof(response->ssid));
@@ -1165,6 +1180,7 @@ void IRAM_ATTR TransferReadyIsr(void *)
 	transferReadyChanged = true;
 }
 
+
 void setup()
 {
 	gpio_reset_pin(ONBOARD_LED);
@@ -1182,7 +1198,6 @@ void setup()
 
 	const size_t eepromSizeNeeded = (MaxRememberedNetworks + 1) * sizeof(WirelessConfigurationData);
 	assert(eepromSizeNeeded < ssids->size);
-
 
 	// Set up the SPI subsystem
 	gpio_reset_pin(SamTfrReadyPin);

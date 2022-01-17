@@ -57,8 +57,6 @@ class ESP8266WiFiClass {
 
         bool disconnect(bool wifioff = false) {return false;}
         void persistent(bool persistent) {}
-        IPAddress softAPIP() { return IPAddress(); };
-        IPAddress localIP() { return IPAddress(); };
 };
 
 extern ESP8266WiFiClass WiFi;
