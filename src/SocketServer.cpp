@@ -1212,7 +1212,7 @@ void loop()
 	if (gpio_get_level(SamTfrReadyPin) == 1 && (transferReadyChanged || millis() - whenLastTransactionFinished > TransferReadyTimeout))
 	{
 		transferReadyChanged = false;
-	// 	ProcessRequest();
+		ProcessRequest();
 		whenLastTransactionFinished = millis();
 	}
 
