@@ -1236,7 +1236,7 @@ void setup()
 	// Set up the fast SPI channel
 	hspi.InitMaster(SPI_MODE1, defaultClockControl, true);
 
-//     Connection::Init();
+    Connection::Init();
 //     Listener::Init();
 #if LWIP_VERSION_MAJOR == 2
 //     mdns_resp_init();
