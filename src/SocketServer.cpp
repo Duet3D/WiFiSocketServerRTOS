@@ -749,9 +749,9 @@ void IRAM_ATTR ProcessRequest()
 				}
 				else
 				{
-					index = -1;
 					WirelessConfigurationData d;
-					if (RetrieveSsidData(receivedClientData->ssid, d) < 0)
+					index = RetrieveSsidData(receivedClientData->ssid, d);
+					if (index < 0)
 					{
 						index = FindEmptySsidEntry();
 					}
