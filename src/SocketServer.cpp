@@ -1210,6 +1210,7 @@ void setup()
 
     tcpip_adapter_init();
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    cfg.nvs_enable = false;
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
 
