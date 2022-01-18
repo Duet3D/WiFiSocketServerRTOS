@@ -1209,10 +1209,10 @@ void setup()
 	gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 
     tcpip_adapter_init();
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     cfg.nvs_enable = false;
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-
 
 	ssids = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, 
 													 ESP_PARTITION_SUBTYPE_DATA_NVS, 
