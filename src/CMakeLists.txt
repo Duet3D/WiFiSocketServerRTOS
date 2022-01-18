@@ -12,7 +12,7 @@ endif()
 
 idf_component_register(SRCS "${srcs}"
                        PRIV_INCLUDE_DIRS "${priv_include_dirs}"
-                       REQUIRES nvs_flash)
+                       REQUIRES spi_flash)
 
 add_subdirectory("stubs")
 target_link_libraries(${COMPONENT_LIB} PUBLIC stubs)

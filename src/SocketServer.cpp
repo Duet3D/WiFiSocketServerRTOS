@@ -44,10 +44,10 @@ extern "C"
 	#include "esp_task_wdt.h"
 }
 
-#include "nvs_flash.h"
 #include "esp_system.h"
 #include "esp_attr.h"
 #include "esp_intr_alloc.h"
+#include "esp_partition.h"
 
 #include "rom/ets_sys.h"
 #include "driver/gpio.h"
