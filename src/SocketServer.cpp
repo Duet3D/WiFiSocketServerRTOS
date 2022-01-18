@@ -1176,8 +1176,10 @@ void setup()
 #endif
 	lastError = nullptr;
 	debugPrint("Init completed\n");
-	gpio_install_isr_service(ESP_INTR_FLAG_IRAM | ESP_INTR_FLAG_EDGE);
+
+	gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
 	gpio_isr_handler_add(SamTfrReadyPin, TransferReadyIsr, nullptr);
+	gpio_set_intr_type(SamTfrReadyPin, GPIO_INTR_POSEDGE);
 	whenLastTransactionFinished = millis();
 	lastStatusReportTime = millis();
 	gpio_set_level(EspReqTransferPin, 1);					// tell the SAM we are ready to receive a command
