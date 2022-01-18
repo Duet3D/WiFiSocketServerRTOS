@@ -1257,7 +1257,6 @@ void setup()
 	whenLastTransactionFinished = millis();
 	lastStatusReportTime = millis();
 	gpio_set_level(EspReqTransferPin, 1);					// tell the SAM we are ready to receive a command
-	currentState = WiFiState::autoReconnecting;
 }
 
 void loop()
