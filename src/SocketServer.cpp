@@ -478,21 +478,35 @@ void StartAccessPoint()
 		SafeStrncpy(currentSsid, apData.ssid, ARRAY_SIZE(currentSsid));
 		if (res == ESP_OK)
 		{
-			tcpip_adapter_ip_info_t ip_info;
-			ip_info.ip.addr = apData.ip;
-			ip_info.gw.addr = apData.ip;
-			ip_info.netmask = IPADDR4_INIT_BYTES(255, 255, 255, 0);
-			res = tcpip_adapter_set_ip_info(TCPIP_ADAPTER_IF_AP, &ip_info);
-
 			if (res == ESP_OK)
 			{
 				wifi_config_t wifi_config;
 				memcpy(wifi_config.ap.ssid, currentSsid, sizeof(wifi_config.ap.ssid));
 				memcpy(wifi_config.ap.password, apData.password, sizeof(wifi_config.ap.password));
+				wifi_config.ap.authmode = WIFI_AUTH_WPA_WPA2_PSK;
 				wifi_config.ap.channel = (apData.channel == 0) ? DefaultWiFiChannel : apData.channel;
-				ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_AP, &wifi_config) );
-				debugPrintf("Starting AP %s with password \"%s\"\n", currentSsid, apData.password);
-				res = esp_wifi_start();
+
+				res = esp_wifi_set_config(ESP_IF_WIFI_AP, &wifi_config);
+
+				if (res == ESP_OK)
+				{
+					res = tcpip_adapter_dhcps_stop(TCPIP_ADAPTER_IF_AP);
+
+					if (res == ESP_OK)
+					{
+						tcpip_adapter_ip_info_t ip_info;
+						ip_info.ip.addr = apData.ip;
+						ip_info.gw.addr = apData.gateway;
+						ip_info.netmask = IPADDR4_INIT_BYTES(255, 255, 255, 0);
+						res = tcpip_adapter_set_ip_info(TCPIP_ADAPTER_IF_AP, &ip_info);
+
+						if (res == ESP_OK) {
+							debugPrintf("Starting AP %s with password \"%s\"\n", currentSsid, apData.password);
+							res = esp_wifi_start();
+						}
+					}
+				}
+
 				if (res != ESP_OK)
 				{
 					debugPrintAlways("Failed to start AP\n");
