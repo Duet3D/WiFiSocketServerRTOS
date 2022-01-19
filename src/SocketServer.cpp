@@ -181,6 +181,9 @@ static void wifi_evt_handler(void* arg, esp_event_base_t event_base,
 			case WIFI_REASON_NO_AP_FOUND:
 				wifiStatus = STATION_NO_AP_FOUND;
 				break;
+			case WIFI_REASON_ASSOC_LEAVE:
+				wifiStatus = STATION_IDLE;
+				break;
 			default:
 				wifiStatus = STATION_CONNECT_FAIL;
 				break;
