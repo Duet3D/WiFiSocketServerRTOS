@@ -490,20 +490,17 @@ void StartAccessPoint()
 
 				if (res == ESP_OK)
 				{
-					res = tcpip_adapter_dhcps_stop(TCPIP_ADAPTER_IF_AP);
+					tcpip_adapter_dhcps_stop(TCPIP_ADAPTER_IF_AP);
 
-					if (res == ESP_OK)
-					{
-						tcpip_adapter_ip_info_t ip_info;
-						ip_info.ip.addr = apData.ip;
-						ip_info.gw.addr = apData.gateway;
-						ip_info.netmask = IPADDR4_INIT_BYTES(255, 255, 255, 0);
-						res = tcpip_adapter_set_ip_info(TCPIP_ADAPTER_IF_AP, &ip_info);
+					tcpip_adapter_ip_info_t ip_info;
+					ip_info.ip.addr = apData.ip;
+					ip_info.gw.addr = apData.gateway;
+					ip_info.netmask = IPADDR4_INIT_BYTES(255, 255, 255, 0);
+					res = tcpip_adapter_set_ip_info(TCPIP_ADAPTER_IF_AP, &ip_info);
 
-						if (res == ESP_OK) {
-							debugPrintf("Starting AP %s with password \"%s\"\n", currentSsid, apData.password);
-							res = esp_wifi_start();
-						}
+					if (res == ESP_OK) {
+						debugPrintf("Starting AP %s with password \"%s\"\n", currentSsid, apData.password);
+						res = esp_wifi_start();
 					}
 				}
 
