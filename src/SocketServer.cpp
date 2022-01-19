@@ -107,6 +107,18 @@ static uint32_t transferBuffer[NumDwords(MaxDataLength + 1)];
 static int ssidIdx = -1;
 static const esp_partition_t* ssids = nullptr;
 
+typedef enum {
+    STATION_IDLE = 0,
+    STATION_CONNECTING,
+    STATION_WRONG_PASSWORD,
+    STATION_NO_AP_FOUND,
+    STATION_CONNECT_FAIL,
+    STATION_GOT_IP
+} station_status_t;
+
+static station_status_t wifiStatus;
+static station_status_t wifi_station_get_connect_status(void) { return wifiStatus; };
+
 // Look up a SSID in our remembered network list, return pointer to it if found
 int RetrieveSsidData(const char *ssid, WirelessConfigurationData& data)
 {
@@ -154,6 +166,32 @@ void FactoryReset()
 	esp_partition_erase_range(ssids, 0, ssids->size);
 }
 
+static void wifi_evt_handler(void* arg, esp_event_base_t event_base,
+                                int32_t event_id, void* event_data)
+{
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+		wifiStatus = STATION_CONNECTING;
+        esp_wifi_connect();
+	} else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        wifi_event_sta_disconnected_t* disconnected = (wifi_event_sta_disconnected_t*) event_data;
+        switch (disconnected->reason) {
+			case WIFI_REASON_AUTH_FAIL:
+				wifiStatus = STATION_WRONG_PASSWORD;
+				break;
+			case WIFI_REASON_NO_AP_FOUND:
+				wifiStatus = STATION_NO_AP_FOUND;
+				break;
+			default:
+				wifiStatus = STATION_CONNECT_FAIL;
+				break;
+		}
+	} else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
+		ESP_ERROR_CHECK(tcpip_adapter_set_hostname(TCPIP_ADAPTER_IF_STA, webHostName));
+	} else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+		wifiStatus = STATION_GOT_IP;
+	}
+}
+
 // Try to connect using the specified SSID and password
 void ConnectToAccessPoint(const WirelessConfigurationData& apData, bool isRetry)
 pre(currentState == NetworkState::idle)
@@ -161,18 +199,20 @@ pre(currentState == NetworkState::idle)
 	SafeStrncpy(currentSsid, apData.ssid, ARRAY_SIZE(currentSsid));
 
 	ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA) );
-	tcpip_adapter_set_hostname(TCPIP_ADAPTER_IF_STA, webHostName);
 
 	wifi_config_t wifi_config;
 	memcpy(wifi_config.sta.ssid, apData.ssid, sizeof(wifi_config.sta.ssid));
 	memcpy(wifi_config.sta.password, apData.password, sizeof(wifi_config.sta.password));
 	ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config) );
 
-	tcpip_adapter_ip_info_t ip_info;
-	ip_info.ip.addr = apData.ip;
-	ip_info.gw.addr = apData.gateway;
-	ip_info.netmask.addr = apData.netmask;
-	tcpip_adapter_set_ip_info(TCPIP_ADAPTER_IF_STA, &ip_info);
+	if (apData.ip != 0) {
+		tcpip_adapter_dhcpc_stop(TCPIP_ADAPTER_IF_STA);
+		tcpip_adapter_ip_info_t ip_info;
+		ip_info.ip.addr = apData.ip;
+		ip_info.gw.addr = apData.gateway;
+		ip_info.netmask.addr = apData.netmask;
+		ESP_ERROR_CHECK(tcpip_adapter_set_ip_info(TCPIP_ADAPTER_IF_STA, &ip_info));
+	}
 
 	debugPrintf("Trying to connect to ssid \"%s\" with password \"%s\"\n", apData.ssid, apData.password);
 	ESP_ERROR_CHECK(esp_wifi_start() );
@@ -1220,10 +1260,17 @@ void setup()
 	gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 
     tcpip_adapter_init();
+
     ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_evt_handler, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, ESP_EVENT_ANY_ID, &wifi_evt_handler, NULL));
+
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     cfg.nvs_enable = false;
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
+    wifiStatus = STATION_IDLE;
 
 	ssids = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, 
 													 ESP_PARTITION_SUBTYPE_DATA_NVS, 
@@ -1299,7 +1346,7 @@ void loop()
 		whenLastTransactionFinished = millis();
 	}
 
-	// ConnectPoll();
+	ConnectPoll();
 	// Connection::PollOne();
 
 	if (currentState == WiFiState::runningAsAccessPoint)

@@ -1,13 +1,5 @@
 #pragma once
 
-typedef enum {
-    STATION_IDLE = 0,
-    STATION_CONNECTING,
-    STATION_WRONG_PASSWORD,
-    STATION_NO_AP_FOUND,
-    STATION_CONNECT_FAIL,
-    STATION_GOT_IP
-} station_status_t;
 
 typedef enum {
 	NONE_SLEEP_T	= 0,
@@ -22,7 +14,6 @@ typedef enum {
 } phy_mode_t;
 
 static bool wifi_set_sleep_type(sleep_type_t type) { return false; };
-static station_status_t wifi_station_get_connect_status(void) { return STATION_IDLE; };
 static phy_mode_t wifi_get_phy_mode(void) {return PHY_MODE_11B; };
 
 #define STATION_IF      0x00
