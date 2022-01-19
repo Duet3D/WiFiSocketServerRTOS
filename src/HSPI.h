@@ -21,8 +21,8 @@
 #ifndef _HSPI_H_INCLUDED
 #define _HSPI_H_INCLUDED
 
-#include <Arduino.h>
 #include <stdlib.h>
+#include <stdint.h>
 
 const uint8_t SPI_MODE0 = 0x00; ///<  CPOL: 0  CPHA: 0
 const uint8_t SPI_MODE1 = 0x01; ///<  CPOL: 0  CPHA: 1

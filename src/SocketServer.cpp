@@ -97,8 +97,6 @@ static WiFiState currentState = WiFiState::idle,
 				lastReportedState = WiFiState::disabled;
 static uint32_t lastBlinkTime = 0;
 
-ADC_MODE(ADC_VCC);          // need this for the ESP.getVcc() call to work
-
 static HSPIClass hspi;
 static uint32_t connectStartTime;
 static uint32_t lastStatusReportTime;
@@ -115,6 +113,12 @@ typedef enum {
     STATION_CONNECT_FAIL,
     STATION_GOT_IP
 } station_status_t;
+
+typedef enum {
+	PHY_MODE_11B	= 1,
+	PHY_MODE_11G	= 2,
+	PHY_MODE_11N    = 3
+} phy_mode_t;
 
 static station_status_t wifiStatus;
 static station_status_t wifi_station_get_connect_status(void) { return wifiStatus; };
@@ -848,10 +852,21 @@ void IRAM_ATTR ProcessRequest()
 
 				response->flashSize = spi_flash_get_chip_size();
 				response->sleepMode = (uint8_t)wifi_get_sleep_type() + 1;
-				response->phyMode = (uint8_t)wifi_get_phy_mode();
+
+				uint8_t phyMode;	
+				esp_wifi_get_protocol(ESP_IF_WIFI_STA, &phyMode);
+
+				if (phyMode | WIFI_PROTOCOL_11B) {
+					response->phyMode = PHY_MODE_11B;
+				} else if (phyMode | WIFI_PROTOCOL_11G) {
+					response->phyMode = PHY_MODE_11G;
+				} else if (phyMode | WIFI_PROTOCOL_11N) {
+					response->phyMode = PHY_MODE_11N;
+				}
+
 				response->zero1 = 0;
 				response->zero2 = 0;
-				response->vcc = system_get_vdd33();
+				response->vcc = esp_wifi_get_vdd33();
 			    SafeStrncpy(response->versionText, firmwareVersion, sizeof(response->versionText));
 			    SafeStrncpy(response->hostName, webHostName, sizeof(response->hostName));
 			    SafeStrncpy(response->ssid, currentSsid, sizeof(response->ssid));
@@ -1149,7 +1164,7 @@ void IRAM_ATTR ProcessRequest()
 				const uint8_t txPower = messageHeaderIn.hdr.flags;
 				if (txPower <= 82)
 				{
-					system_phy_set_max_tpw(txPower);
+					esp_wifi_set_max_tx_power(txPower);
 					SendResponse(ResponseEmpty);
 				}
 				else
