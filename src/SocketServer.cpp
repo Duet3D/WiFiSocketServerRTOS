@@ -793,32 +793,33 @@ void IRAM_ATTR ProcessRequest()
 				switch (esp_reset_reason())
 				{
 				case ESP_RST_POWERON:
-					response->resetReason = 0;
+					response->resetReason = 0; // Power-on
 					break;
-				case ESP_RST_INT_WDT:
 				case ESP_RST_WDT:
-				case ESP_RST_BROWNOUT:
-					response->resetReason = 1;
+					response->resetReason = 1; // Hardware watchdog
 					break;
 				case ESP_RST_PANIC:
-				case ESP_RST_UNKNOWN:
-					response->resetReason = 2;
+					response->resetReason = 2; // Exception
 					break;
 				case ESP_RST_TASK_WDT:
-					response->resetReason = 3;
+				case ESP_RST_INT_WDT:
+					response->resetReason = 3; // Software watchdog
 					break;
 				case ESP_RST_SW:
 				case ESP_RST_FAST_SW:
-					response->resetReason = 4;
+					response->resetReason = 4; // Software-initiated reset
 					break;
 				case ESP_RST_DEEPSLEEP:
-					response->resetReason = 5;
+					response->resetReason = 5; // Wake from deep-sleep
 					break;
 				case ESP_RST_EXT:
-					response->resetReason = 6;
+					response->resetReason = 6; // External reset
 					break;
-				
+				case ESP_RST_SDIO:
+				case ESP_RST_UNKNOWN:
+				case ESP_RST_BROWNOUT:
 				default:
+					response->resetReason = 99; // Out-of-range, translates to 'Unknown' in RRF
 					break;
 				}
 
