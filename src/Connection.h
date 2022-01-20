@@ -14,9 +14,7 @@
 #include <cstddef>
 #include "include/MessageFormats.h"			// for ConnState
 
-// If we #include "tcp.h" here we get clashes between two different ip_addr.h files, so don't do that here
-class tcp_pcb;
-class pbuf;
+#include "lwip/api.h"
 
 class Connection
 {
@@ -36,7 +34,7 @@ public:
 	void Poll();
 
 	// Callback functions
-	int Accept(tcp_pcb *pcb);
+	int Accept(struct netconn *pcb);
 	void ConnError(int err);
 	int ConnRecv(pbuf *p, int err);
 	int ConnSent(uint16_t len);
@@ -55,6 +53,8 @@ private:
 	void FreePbuf();
 	void Report();
 
+	void PollRead();
+
 	void SetState(ConnState st)
 	{
 		state = st;
@@ -67,12 +67,11 @@ private:
 	uint16_t remotePort;
 
 	uint32_t remoteIp;
-	uint32_t writeTimer;
 	uint32_t closeTimer;
 	volatile size_t unAcked;	// how much data we have sent but hasn't been acknowledged
 	size_t readIndex;			// how much data we have already read from the current pbuf
 	size_t alreadyRead;			// how much data we read from previous pbufs and didn't tell LWIP about yet
-	tcp_pcb *ownPcb;			// the pcb that corresponds to this connection
+	struct netconn *ownPcb;		// the pcb that corresponds to this connection
 	pbuf *pb;					// the buffers holding data we have received that has not yet been taken
 
 	static Connection *connectionList[MaxConnections];
