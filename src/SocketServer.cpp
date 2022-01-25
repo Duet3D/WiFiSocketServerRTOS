@@ -532,6 +532,7 @@ void StartAccessPoint()
 				memcpy(wifi_config.ap.password, apData.password, sizeof(wifi_config.ap.password));
 				wifi_config.ap.authmode = WIFI_AUTH_WPA_WPA2_PSK;
 				wifi_config.ap.channel = (apData.channel == 0) ? DefaultWiFiChannel : apData.channel;
+				wifi_config.ap.max_connection = 4;
 
 				res = esp_wifi_set_config(ESP_IF_WIFI_AP, &wifi_config);
 
