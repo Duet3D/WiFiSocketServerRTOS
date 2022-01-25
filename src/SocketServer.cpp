@@ -196,6 +196,8 @@ static void wifi_evt_handler(void* arg, esp_event_base_t event_base,
 		ESP_ERROR_CHECK(tcpip_adapter_set_hostname(TCPIP_ADAPTER_IF_STA, webHostName));
 	} else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
 		wifiStatus = STATION_GOT_IP;
+	} else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_AP_START) {
+		ESP_ERROR_CHECK(tcpip_adapter_dhcps_start(TCPIP_ADAPTER_IF_AP));
 	}
 }
 
@@ -525,31 +527,28 @@ void StartAccessPoint()
 		SafeStrncpy(currentSsid, apData.ssid, ARRAY_SIZE(currentSsid));
 		if (res == ESP_OK)
 		{
+			wifi_config_t wifi_config;
+			memcpy(wifi_config.ap.ssid, currentSsid, sizeof(wifi_config.ap.ssid));
+			memcpy(wifi_config.ap.password, apData.password, sizeof(wifi_config.ap.password));
+			wifi_config.ap.authmode = WIFI_AUTH_WPA_WPA2_PSK;
+			wifi_config.ap.channel = (apData.channel == 0) ? DefaultWiFiChannel : apData.channel;
+			wifi_config.ap.max_connection = 4;
+
+			res = esp_wifi_set_config(ESP_IF_WIFI_AP, &wifi_config);
+
 			if (res == ESP_OK)
 			{
-				wifi_config_t wifi_config;
-				memcpy(wifi_config.ap.ssid, currentSsid, sizeof(wifi_config.ap.ssid));
-				memcpy(wifi_config.ap.password, apData.password, sizeof(wifi_config.ap.password));
-				wifi_config.ap.authmode = WIFI_AUTH_WPA_WPA2_PSK;
-				wifi_config.ap.channel = (apData.channel == 0) ? DefaultWiFiChannel : apData.channel;
-				wifi_config.ap.max_connection = 4;
+				tcpip_adapter_dhcps_stop(TCPIP_ADAPTER_IF_AP);
 
-				res = esp_wifi_set_config(ESP_IF_WIFI_AP, &wifi_config);
+				tcpip_adapter_ip_info_t ip_info;
+				ip_info.ip.addr = apData.ip;
+				ip_info.gw.addr = apData.gateway;
+				ip_info.netmask = IPADDR4_INIT_BYTES(255, 255, 255, 0);
+				res = tcpip_adapter_set_ip_info(TCPIP_ADAPTER_IF_AP, &ip_info);
 
-				if (res == ESP_OK)
-				{
-					tcpip_adapter_dhcps_stop(TCPIP_ADAPTER_IF_AP);
-
-					tcpip_adapter_ip_info_t ip_info;
-					ip_info.ip.addr = apData.ip;
-					ip_info.gw.addr = apData.gateway;
-					ip_info.netmask = IPADDR4_INIT_BYTES(255, 255, 255, 0);
-					res = tcpip_adapter_set_ip_info(TCPIP_ADAPTER_IF_AP, &ip_info);
-
-					if (res == ESP_OK) {
-						debugPrintf("Starting AP %s with password \"%s\"\n", currentSsid, apData.password);
-						res = esp_wifi_start();
-					}
+				if (res == ESP_OK) {
+					debugPrintf("Starting AP %s with password \"%s\"\n", currentSsid, apData.password);
+					res = esp_wifi_start();
 				}
 
 				if (res != ESP_OK)
@@ -576,6 +575,7 @@ void StartAccessPoint()
 				lastError = "Failed to start DNS\n";
 				debugPrintf("%s\n", lastError);
 			}
+
 			SafeStrncpy(currentSsid, apData.ssid, ARRAY_SIZE(currentSsid));
 			currentState = WiFiState::runningAsAccessPoint;
 			gpio_set_level(ONBOARD_LED, ONBOARD_LED_ON);
