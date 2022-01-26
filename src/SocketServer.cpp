@@ -178,9 +178,9 @@ static void wifi_evt_handler(void* arg, esp_event_base_t event_base,
 	if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
 			esp_wifi_set_protocol(ESP_IF_WIFI_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
 #if NO_WIFI_SLEEP
-			ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));
-#else
 			ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+#else
+			ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));
 #endif
 	} else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
 		wifi_event_sta_disconnected_t* disconnected = (wifi_event_sta_disconnected_t*) event_data;
@@ -891,13 +891,13 @@ void IRAM_ATTR ProcessRequest()
 				switch (ps)
 				{
 				case WIFI_PS_NONE:
-					response->sleepMode = 0;
+					response->sleepMode = 1;
 					break;
 				case WIFI_PS_MIN_MODEM:
-					response->sleepMode = 2;
+					response->sleepMode = 3;
 					break;
 				default:	
-					// sleepMode = 1 (light sleep) is not set by firmware.
+					// sleepMode = 2 (light sleep) is not set by firmware.
 					break;
 				}
 
