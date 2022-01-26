@@ -177,15 +177,12 @@ static void wifi_evt_handler(void* arg, esp_event_base_t event_base,
 	if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
 		if (!scanning) {
 			wifiStatus = STATION_CONNECTING;
+			esp_wifi_set_protocol(ESP_IF_WIFI_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
 			esp_wifi_connect();
 		}
 	} else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
 		wifi_event_sta_disconnected_t* disconnected = (wifi_event_sta_disconnected_t*) event_data;
 		if (disconnected->reason != WIFI_REASON_ASSOC_LEAVE && wifiRetry < wifiRetries) {
-			if (disconnected->reason == WIFI_REASON_BASIC_RATE_NOT_SUPPORT) {
-				/*Switch to 802.11 bgn mode */
-				esp_wifi_set_protocol(ESP_IF_WIFI_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
-			}
 			wifiStatus = STATION_CONNECTING;
 			wifiRetry++;
 			esp_wifi_connect();
