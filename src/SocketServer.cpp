@@ -104,6 +104,7 @@ static uint32_t transferBuffer[NumDwords(MaxDataLength + 1)];
 
 static int ssidIdx = -1;
 static const esp_partition_t* ssids = nullptr;
+static bool scanning = false;
 
 typedef enum {
 	STATION_IDLE = 0,
@@ -174,8 +175,10 @@ static void wifi_evt_handler(void* arg, esp_event_base_t event_base,
 								int32_t event_id, void* event_data)
 {
 	if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-		wifiStatus = STATION_CONNECTING;
-		esp_wifi_connect();
+		if (!scanning) {
+			wifiStatus = STATION_CONNECTING;
+			esp_wifi_connect();
+		}
 	} else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
 		wifi_event_sta_disconnected_t* disconnected = (wifi_event_sta_disconnected_t*) event_data;
 		switch (disconnected->reason) {
@@ -416,29 +419,51 @@ pre(currentState == WiFiState::idle)
 
 	if (ssid == nullptr || ssid[0] == 0)
 	{
-		// Auto scan for strongest known network, then try to connect to it
-		const int8_t num_ssids = WiFi.scanNetworks(false, true);
-		if (num_ssids < 0)
-		{
+		scanning = true;
+		esp_wifi_restore();
+
+		ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+		ESP_ERROR_CHECK(esp_wifi_start());
+
+		wifi_scan_config_t cfg;
+		cfg.ssid = NULL;
+		cfg.bssid = NULL;
+		cfg.show_hidden = true;
+
+		esp_err_t res = esp_wifi_scan_start(&cfg, true);
+
+		if (res != ESP_OK) {
 			lastError = "network scan failed";
 			currentState = WiFiState::idle;
 			gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 			return;
 		}
 
+		uint16_t num_ssids = 0;
+		esp_wifi_scan_get_ap_num(&num_ssids);
+
+		wifi_ap_record_t *ap_records = (wifi_ap_record_t*) calloc(num_ssids, sizeof(wifi_ap_record_t));
+
+		esp_wifi_scan_get_ap_records(&num_ssids, ap_records);
+
 		// Find the strongest network that we know about
 		int8_t strongestNetwork = -1;
 		for (int8_t i = 0; i < num_ssids; ++i)
 		{
-			debugPrintfAlways("found network %s\n", WiFi.SSID(i).c_str());
-			if (strongestNetwork < 0 || WiFi.RSSI(i) > WiFi.RSSI(strongestNetwork))
+			debugPrintfAlways("found network %s\n", ap_records[i].ssid);
+			if (strongestNetwork < 0 || ap_records[i].rssi > ap_records[strongestNetwork].rssi)
 			{
-				if (RetrieveSsidData(WiFi.SSID(i).c_str(), wp) > 0)
+				if (RetrieveSsidData((const char*)ap_records[i].ssid, wp) > 0)
 				{
 					strongestNetwork = i;
 				}
 			}
 		}
+
+		free(ap_records);
+		esp_wifi_stop();
+		scanning = false;
+
 		if (strongestNetwork < 0)
 		{
 			lastError = "no known networks found";
