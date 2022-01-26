@@ -44,17 +44,17 @@ HSPIClass::HSPIClass() {
 
 void HSPIClass::InitMaster(uint8_t mode, uint32_t clockReg, bool msbFirst)
 {
-    gpio_reset_pin(SCK);
-    PIN_PULLUP_EN(PERIPHS_IO_MUX_MTMS_U);
-    PIN_FUNC_SELECT(PERIPHS_IO_MUX_MTMS_U, FUNC_HSPI_CLK);
+	gpio_reset_pin(SCK);
+	PIN_PULLUP_EN(PERIPHS_IO_MUX_MTMS_U);
+	PIN_FUNC_SELECT(PERIPHS_IO_MUX_MTMS_U, FUNC_HSPI_CLK);
 
-    gpio_reset_pin(MOSI);
-    PIN_PULLUP_EN(PERIPHS_IO_MUX_MTCK_U);
-    PIN_FUNC_SELECT(PERIPHS_IO_MUX_MTCK_U, FUNC_HSPID_MOSI);
+	gpio_reset_pin(MOSI);
+	PIN_PULLUP_EN(PERIPHS_IO_MUX_MTCK_U);
+	PIN_FUNC_SELECT(PERIPHS_IO_MUX_MTCK_U, FUNC_HSPID_MOSI);
 
-    gpio_reset_pin(MISO);
-    PIN_PULLUP_EN(PERIPHS_IO_MUX_MTDI_U);
-    PIN_FUNC_SELECT(PERIPHS_IO_MUX_MTDI_U, FUNC_HSPIQ_MISO);
+	gpio_reset_pin(MISO);
+	PIN_PULLUP_EN(PERIPHS_IO_MUX_MTDI_U);
+	PIN_FUNC_SELECT(PERIPHS_IO_MUX_MTDI_U, FUNC_HSPIQ_MISO);
 
 	REG(SPI_CTRL(HSPI)) = (msbFirst) ? 0 : SPI_WR_BIT_ORDER | SPI_RD_BIT_ORDER;
 
@@ -95,16 +95,16 @@ void HSPIClass::InitMaster(uint8_t mode, uint32_t clockReg, bool msbFirst)
 }
 
 void HSPIClass::end() {
-    // Select GPIO pin function and reset
-    PIN_FUNC_SELECT(PERIPHS_IO_MUX_MTDI_U, FUNC_GPIO12);
-    gpio_reset_pin(MISO);
-    gpio_set_direction(MISO, GPIO_MODE_INPUT);
-    PIN_FUNC_SELECT(PERIPHS_IO_MUX_MTCK_U, FUNC_GPIO13);
-    gpio_reset_pin(MOSI);
-    gpio_set_direction(MOSI, GPIO_MODE_INPUT);
-    PIN_FUNC_SELECT(PERIPHS_IO_MUX_MTMS_U, FUNC_GPIO14);
-    gpio_reset_pin(SCK);
-    gpio_set_direction(SCK, GPIO_MODE_INPUT);
+	// Select GPIO pin function and reset
+	PIN_FUNC_SELECT(PERIPHS_IO_MUX_MTDI_U, FUNC_GPIO12);
+	gpio_reset_pin(MISO);
+	gpio_set_direction(MISO, GPIO_MODE_INPUT);
+	PIN_FUNC_SELECT(PERIPHS_IO_MUX_MTCK_U, FUNC_GPIO13);
+	gpio_reset_pin(MOSI);
+	gpio_set_direction(MOSI, GPIO_MODE_INPUT);
+	PIN_FUNC_SELECT(PERIPHS_IO_MUX_MTMS_U, FUNC_GPIO14);
+	gpio_reset_pin(SCK);
+	gpio_set_direction(SCK, GPIO_MODE_INPUT);
 }
 
 // Begin a transaction without changing settings

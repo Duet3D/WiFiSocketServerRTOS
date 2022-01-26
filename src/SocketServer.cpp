@@ -1135,8 +1135,8 @@ void IRAM_ATTR TransferReadyIsr(void *)
 
 void setup()
 {
-    gpio_reset_pin(ONBOARD_LED);
-    gpio_set_direction(ONBOARD_LED, GPIO_MODE_OUTPUT);
+	gpio_reset_pin(ONBOARD_LED);
+	gpio_set_direction(ONBOARD_LED, GPIO_MODE_OUTPUT);
 	gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 
 // 	WiFi.mode(WIFI_OFF);
@@ -1148,19 +1148,19 @@ void setup()
 // 	EEPROM.begin(eepromSizeNeeded);
 
 	// Set up the SPI subsystem
-    gpio_reset_pin(SamTfrReadyPin);
-    gpio_set_direction(SamTfrReadyPin, GPIO_MODE_INPUT);
+	gpio_reset_pin(SamTfrReadyPin);
+	gpio_set_direction(SamTfrReadyPin, GPIO_MODE_INPUT);
 
-    gpio_reset_pin(EspReqTransferPin);
-    gpio_set_direction(EspReqTransferPin, GPIO_MODE_OUTPUT);
+	gpio_reset_pin(EspReqTransferPin);
+	gpio_set_direction(EspReqTransferPin, GPIO_MODE_OUTPUT);
 	gpio_set_level(EspReqTransferPin, 0);
 
-    gpio_reset_pin(SamSSPin);
-    gpio_set_direction(SamSSPin, GPIO_MODE_OUTPUT);
+	gpio_reset_pin(SamSSPin);
+	gpio_set_direction(SamSSPin, GPIO_MODE_OUTPUT);
 	gpio_set_level(SamSSPin, 1);
 
-    // Set up the fast SPI channel
-    hspi.InitMaster(SPI_MODE1, defaultClockControl, true);
+	// Set up the fast SPI channel
+	hspi.InitMaster(SPI_MODE1, defaultClockControl, true);
 
 //     Connection::Init();
 //     Listener::Init();
