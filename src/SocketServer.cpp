@@ -11,7 +11,6 @@
 
 extern "C"
 {
-	#include "user_interface.h"     // for struct rst_info
 	#include "lwip/init.h"			// for version info
 	#include "lwip/stats.h"			// for stats_display()
 
@@ -234,9 +233,9 @@ pre(currentState == NetworkState::idle)
 //	WiFi.setAutoReconnect(false);								// auto reconnect NEVER works in our configuration so disable it, it just wastes time
 	WiFi.setAutoReconnect(true);
 #if NO_WIFI_SLEEP
-	wifi_set_sleep_type(NONE_SLEEP_T);
+	ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));
 #else
-	wifi_set_sleep_type(MODEM_SLEEP_T);
+	ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
 #endif
 
 	if (isRetry)
@@ -880,7 +879,22 @@ void IRAM_ATTR ProcessRequest()
 				}
 
 				response->flashSize = spi_flash_get_chip_size();
-				response->sleepMode = (uint8_t)wifi_get_sleep_type() + 1;
+
+				wifi_ps_type_t ps = WIFI_PS_NONE;
+				esp_wifi_get_ps(&ps);
+
+				switch (ps)
+				{
+				case WIFI_PS_NONE:
+					response->sleepMode = 0;
+					break;
+				case WIFI_PS_MIN_MODEM:
+					response->sleepMode = 2;
+					break;
+				default:	
+					// sleepMode = 1 (light sleep) is not set by firmware.
+					break;
+				}
 
 				uint8_t phyMode;	
 				esp_wifi_get_protocol(ESP_IF_WIFI_STA, &phyMode);
