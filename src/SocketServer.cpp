@@ -106,18 +106,18 @@ static int ssidIdx = -1;
 static const esp_partition_t* ssids = nullptr;
 
 typedef enum {
-    STATION_IDLE = 0,
-    STATION_CONNECTING,
-    STATION_WRONG_PASSWORD,
-    STATION_NO_AP_FOUND,
-    STATION_CONNECT_FAIL,
-    STATION_GOT_IP
+	STATION_IDLE = 0,
+	STATION_CONNECTING,
+	STATION_WRONG_PASSWORD,
+	STATION_NO_AP_FOUND,
+	STATION_CONNECT_FAIL,
+	STATION_GOT_IP
 } station_status_t;
 
 typedef enum {
 	PHY_MODE_11B	= 1,
 	PHY_MODE_11G	= 2,
-	PHY_MODE_11N    = 3
+	PHY_MODE_11N	= 3
 } phy_mode_t;
 
 static station_status_t wifiStatus;
@@ -171,14 +171,14 @@ void FactoryReset()
 }
 
 static void wifi_evt_handler(void* arg, esp_event_base_t event_base,
-                                int32_t event_id, void* event_data)
+								int32_t event_id, void* event_data)
 {
-    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+	if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
 		wifiStatus = STATION_CONNECTING;
-        esp_wifi_connect();
+		esp_wifi_connect();
 	} else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        wifi_event_sta_disconnected_t* disconnected = (wifi_event_sta_disconnected_t*) event_data;
-        switch (disconnected->reason) {
+		wifi_event_sta_disconnected_t* disconnected = (wifi_event_sta_disconnected_t*) event_data;
+		switch (disconnected->reason) {
 			case WIFI_REASON_AUTH_FAIL:
 				wifiStatus = STATION_WRONG_PASSWORD;
 				break;
@@ -867,10 +867,10 @@ void IRAM_ATTR ProcessRequest()
 				response->zero1 = 0;
 				response->zero2 = 0;
 				response->vcc = esp_wifi_get_vdd33();
-			    SafeStrncpy(response->versionText, firmwareVersion, sizeof(response->versionText));
-			    SafeStrncpy(response->hostName, webHostName, sizeof(response->hostName));
-			    SafeStrncpy(response->ssid, currentSsid, sizeof(response->ssid));
-			    response->clockReg = REG(SPI_CLOCK(HSPI));
+				SafeStrncpy(response->versionText, firmwareVersion, sizeof(response->versionText));
+				SafeStrncpy(response->hostName, webHostName, sizeof(response->hostName));
+				SafeStrncpy(response->ssid, currentSsid, sizeof(response->ssid));
+				response->clockReg = REG(SPI_CLOCK(HSPI));
 				SendResponse(sizeof(NetworkStatusResponse));
 			}
 			break;
@@ -1278,18 +1278,18 @@ void setup()
 	gpio_set_direction(ONBOARD_LED, GPIO_MODE_OUTPUT);
 	gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 
-    tcpip_adapter_init();
+	tcpip_adapter_init();
 
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
+	ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_evt_handler, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, ESP_EVENT_ANY_ID, &wifi_evt_handler, NULL));
+	ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_evt_handler, NULL));
+	ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, ESP_EVENT_ANY_ID, &wifi_evt_handler, NULL));
 
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    cfg.nvs_enable = false;
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+	wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+	cfg.nvs_enable = false;
+	ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
-    wifiStatus = STATION_IDLE;
+	wifiStatus = STATION_IDLE;
 
 	ssids = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, 
 													 ESP_PARTITION_SUBTYPE_DATA_NVS, 
