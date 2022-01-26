@@ -229,11 +229,11 @@ void ConnectPoll()
 			}
 			else
 			{
-#if LWIP_VERSION_MAJOR == 2
-				mdns_resp_netif_settings_changed(netif_list);	// STA is on first interface
-#else
-				MDNS.begin(webHostName);
-#endif
+// #if LWIP_VERSION_MAJOR == 2
+// 				mdns_resp_netif_settings_changed(netif_list);	// STA is on first interface
+// #else
+// 				MDNS.begin(webHostName);
+// #endif
 			}
 
 			debugPrint("Connected to AP\n");
@@ -497,11 +497,11 @@ void StartAccessPoint()
 			SafeStrncpy(currentSsid, apData.ssid, ARRAY_SIZE(currentSsid));
 			currentState = WiFiState::runningAsAccessPoint;
 			gpio_set_level(ONBOARD_LED, ONBOARD_LED_ON);
-#if LWIP_VERSION_MAJOR == 2
-			mdns_resp_netif_settings_changed(netif_list->next);		// AP is on second interface
-#else
-			MDNS.begin(webHostName);
-#endif
+// #if LWIP_VERSION_MAJOR == 2
+// 			mdns_resp_netif_settings_changed(netif_list->next);		// AP is on second interface
+// #else
+// 			MDNS.begin(webHostName);
+// #endif
 		}
 		else
 		{
@@ -533,92 +533,92 @@ static union
 	uint32_t asDwords[headerDwords];	// to force alignment
 } messageHeaderOut;
 
-#if LWIP_VERSION_MAJOR == 2
+// #if LWIP_VERSION_MAJOR == 2
 
-void GetServiceTxtEntries(struct mdns_service *service, void *txt_userdata)
-{
-	for (size_t i = 0; i < ARRAY_SIZE(MdnsTxtRecords); i++)
-	{
-		mdns_resp_add_service_txtitem(service, MdnsTxtRecords[i], strlen(MdnsTxtRecords[i]));
-	}
-}
+// void GetServiceTxtEntries(struct mdns_service *service, void *txt_userdata)
+// {
+// 	for (size_t i = 0; i < ARRAY_SIZE(MdnsTxtRecords); i++)
+// 	{
+// 		mdns_resp_add_service_txtitem(service, MdnsTxtRecords[i], strlen(MdnsTxtRecords[i]));
+// 	}
+// }
 
-// Rebuild the mDNS services
-void RebuildServices()
-{
-	for (struct netif *item = netif_list; item != nullptr; item = item->next)
-	{
-		mdns_resp_remove_netif(item);
-		mdns_resp_add_netif(item, webHostName, MdnsTtl);
-		mdns_resp_add_service(item, "echo", "_echo", DNSSD_PROTO_TCP, 0, 0, nullptr, nullptr);
+// // Rebuild the mDNS services
+// void RebuildServices()
+// {
+// 	for (struct netif *item = netif_list; item != nullptr; item = item->next)
+// 	{
+// 		mdns_resp_remove_netif(item);
+// 		mdns_resp_add_netif(item, webHostName, MdnsTtl);
+// 		mdns_resp_add_service(item, "echo", "_echo", DNSSD_PROTO_TCP, 0, 0, nullptr, nullptr);
 
-		for (size_t protocol = 0; protocol < 3; protocol++)
-		{
-			const uint16_t port = Listener::GetPortByProtocol(protocol);
-			if (port != 0)
-			{
-				service_get_txt_fn_t txtFunc = (protocol == 0/*HttpProtocol*/) ? GetServiceTxtEntries : nullptr;
-				mdns_resp_add_service(item, webHostName, MdnsServiceStrings[protocol], DNSSD_PROTO_TCP, port, MdnsTtl, txtFunc, nullptr);
-			}
-		}
+// 		for (size_t protocol = 0; protocol < 3; protocol++)
+// 		{
+// 			const uint16_t port = Listener::GetPortByProtocol(protocol);
+// 			if (port != 0)
+// 			{
+// 				service_get_txt_fn_t txtFunc = (protocol == 0/*HttpProtocol*/) ? GetServiceTxtEntries : nullptr;
+// 				mdns_resp_add_service(item, webHostName, MdnsServiceStrings[protocol], DNSSD_PROTO_TCP, port, MdnsTtl, txtFunc, nullptr);
+// 			}
+// 		}
 
-		mdns_resp_netif_settings_changed(item);
-	}
-}
+// 		mdns_resp_netif_settings_changed(item);
+// 	}
+// }
 
-void RemoveMdnsServices()
-{
-	for (struct netif *item = netif_list; item != nullptr; item = item->next)
-	{
-		mdns_resp_remove_netif(item);
-	}
-}
+// void RemoveMdnsServices()
+// {
+// 	for (struct netif *item = netif_list; item != nullptr; item = item->next)
+// 	{
+// 		mdns_resp_remove_netif(item);
+// 	}
+// }
 
-#else
+// #else
 
-// Rebuild the MDNS server to advertise a single service
-void AdvertiseService(int service, uint16_t port)
-{
-	static int currentService = -1;
-	static const char * const serviceNames[] = { "http", "tcp", "ftp" };
+// // Rebuild the MDNS server to advertise a single service
+// void AdvertiseService(int service, uint16_t port)
+// {
+// 	static int currentService = -1;
+// 	static const char * const serviceNames[] = { "http", "tcp", "ftp" };
 
-	if (service != currentService)
-	{
-		currentService = service;
-		MDNS.deleteServices();
-		if (service >= 0 && service < (int)ARRAY_SIZE(serviceNames))
-		{
-			const char* serviceName = serviceNames[service];
-			MDNS.addService(serviceName, "tcp", port);
-			MDNS.addServiceTxt(serviceName, "tcp", "product", "DuetWiFi");
-			MDNS.addServiceTxt(serviceName, "tcp", "version", firmwareVersion);
-		}
-	}
-}
+// 	if (service != currentService)
+// 	{
+// 		currentService = service;
+// 		MDNS.deleteServices();
+// 		if (service >= 0 && service < (int)ARRAY_SIZE(serviceNames))
+// 		{
+// 			const char* serviceName = serviceNames[service];
+// 			MDNS.addService(serviceName, "tcp", port);
+// 			MDNS.addServiceTxt(serviceName, "tcp", "product", "DuetWiFi");
+// 			MDNS.addServiceTxt(serviceName, "tcp", "version", firmwareVersion);
+// 		}
+// 	}
+// }
 
-// Rebuild the mDNS services
-void RebuildServices()
-{
-	if (currentState == WiFiState::connected)		// MDNS server only works in station mode
-	{
-		// Unfortunately the official ESP8266 mDNS library only reports one service.
-		// I (chrishamm) tried to use the old mDNS responder, which is also capable of sending
-		// mDNS broadcasts, but the packets it generates are broken and thus not of use.
-		for (int service = 0; service < 3; ++service)
-		{
-			const uint16_t port = Listener::GetPortByProtocol(service);
-			if (port != 0)
-			{
-				AdvertiseService(service, port);
-				return;
-			}
-		}
+// // Rebuild the mDNS services
+// void RebuildServices()
+// {
+// 	if (currentState == WiFiState::connected)		// MDNS server only works in station mode
+// 	{
+// 		// Unfortunately the official ESP8266 mDNS library only reports one service.
+// 		// I (chrishamm) tried to use the old mDNS responder, which is also capable of sending
+// 		// mDNS broadcasts, but the packets it generates are broken and thus not of use.
+// 		for (int service = 0; service < 3; ++service)
+// 		{
+// 			const uint16_t port = Listener::GetPortByProtocol(service);
+// 			if (port != 0)
+// 			{
+// 				AdvertiseService(service, port);
+// 				return;
+// 			}
+// 		}
 
-		AdvertiseService(-1, 0);		// no services to advertise
-	}
-}
+// 		AdvertiseService(-1, 0);		// no services to advertise
+// 	}
+// }
 
-#endif
+// #endif
 
 // Send a response.
 // 'response' is the number of byes of response if positive, or the error code if negative.
@@ -944,7 +944,7 @@ void IRAM_ATTR ProcessRequest()
 				{
 					if (lcData.protocol < 3)			// if it's FTP, HTTP or Telnet protocol
 					{
-						RebuildServices();				// update the MDNS services
+						// RebuildServices();				// update the MDNS services
 					}
 					debugPrintf("%sListening on port %u\n", (lcData.maxConnections == 0) ? "Stopped " : "", lcData.port);
 				}
@@ -1107,18 +1107,18 @@ void IRAM_ATTR ProcessRequest()
 		case NetworkCommand::networkStop:					// disconnect from an access point, or close down our own access point
 			Connection::TerminateAll();						// terminate all connections
 			Listener::StopListening(0);						// stop listening on all ports
-			RebuildServices();								// remove the MDNS services
+			// RebuildServices();								// remove the MDNS services
 			switch (currentState)
 			{
 			case WiFiState::connected:
 			case WiFiState::connecting:
 			case WiFiState::reconnecting:
-#if LWIP_VERSION_MAJOR == 2
-				RemoveMdnsServices();
-#endif
-#if LWIP_VERSION_MAJOR == 1
-				MDNS.deleteServices();
-#endif
+// #if LWIP_VERSION_MAJOR == 2
+// 				RemoveMdnsServices();
+// #endif
+// #if LWIP_VERSION_MAJOR == 1
+// 				MDNS.deleteServices();
+// #endif
 				delay(20);									// try to give lwip time to recover from stopping everything
 				WiFi.disconnect(true);
 				break;
