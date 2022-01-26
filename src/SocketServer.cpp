@@ -907,12 +907,13 @@ void IRAM_ATTR ProcessRequest()
 				uint8_t phyMode;	
 				esp_wifi_get_protocol(ESP_IF_WIFI_STA, &phyMode);
 
-				if (phyMode | WIFI_PROTOCOL_11B) {
-					response->phyMode = PHY_MODE_11B;
+
+				if (phyMode | WIFI_PROTOCOL_11N) {
+					response->phyMode = PHY_MODE_11N;
 				} else if (phyMode | WIFI_PROTOCOL_11G) {
 					response->phyMode = PHY_MODE_11G;
-				} else if (phyMode | WIFI_PROTOCOL_11N) {
-					response->phyMode = PHY_MODE_11N;
+				} else if (phyMode | WIFI_PROTOCOL_11B) {
+					response->phyMode = PHY_MODE_11B;
 				}
 
 				response->zero1 = 0;
