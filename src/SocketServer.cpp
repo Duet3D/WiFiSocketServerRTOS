@@ -42,6 +42,8 @@ extern "C"
 	#include "esp_task_wdt.h"
 }
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/event_groups.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "esp_system.h"
@@ -102,7 +104,6 @@ static uint32_t transferBuffer[NumDwords(MaxDataLength + 1)];
 
 static int ssidIdx = -1;
 static const esp_partition_t* ssids = nullptr;
-static bool scanning = false;
 static constexpr int wifiRetries = 2;
 static int wifiRetry = 0;
 
@@ -133,7 +134,7 @@ int RetrieveSsidData(const char *ssid, WirelessConfigurationData& data)
 		esp_partition_read(ssids, i * sizeof(WirelessConfigurationData), &d, sizeof(WirelessConfigurationData));
 		if (strncmp(ssid, d.ssid, sizeof(d.ssid)) == 0)
 		{
-			memcpy(&data, &d, sizeof(data));
+			data = d;
 			return i;
 		}
 	}
@@ -175,11 +176,12 @@ static void wifi_evt_handler(void* arg, esp_event_base_t event_base,
 								int32_t event_id, void* event_data)
 {
 	if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-		if (!scanning) {
-			wifiStatus = STATION_CONNECTING;
 			esp_wifi_set_protocol(ESP_IF_WIFI_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
-			esp_wifi_connect();
-		}
+#if NO_WIFI_SLEEP
+			ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));
+#else
+			ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+#endif
 	} else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
 		wifi_event_sta_disconnected_t* disconnected = (wifi_event_sta_disconnected_t*) event_data;
 		if (disconnected->reason != WIFI_REASON_ASSOC_LEAVE && wifiRetry < wifiRetries) {
@@ -219,10 +221,6 @@ pre(currentState == NetworkState::idle)
 {
 	SafeStrncpy(currentSsid, apData.ssid, ARRAY_SIZE(currentSsid));
 
-	esp_wifi_restore();
-
-	ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA) );
-
 	wifi_config_t wifi_config;
 	memcpy(wifi_config.sta.ssid, apData.ssid, sizeof(wifi_config.sta.ssid));
 	memcpy(wifi_config.sta.password, apData.password, sizeof(wifi_config.sta.password));
@@ -238,13 +236,8 @@ pre(currentState == NetworkState::idle)
 	}
 
 	debugPrintf("Trying to connect to ssid \"%s\" with password \"%s\"\n", apData.ssid, apData.password);
-	ESP_ERROR_CHECK(esp_wifi_start() );
-
-#if NO_WIFI_SLEEP
-	ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));
-#else
-	ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
-#endif
+	wifiStatus = STATION_CONNECTING;
+	esp_wifi_connect();
 
 	if (isRetry)
 	{
@@ -424,14 +417,13 @@ pre(currentState == WiFiState::idle)
 {
 	WirelessConfigurationData wp;
 
+	esp_wifi_restore();
+
+	ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+	ESP_ERROR_CHECK(esp_wifi_start());
+
 	if (ssid == nullptr || ssid[0] == 0)
 	{
-		scanning = true;
-		esp_wifi_restore();
-
-		ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-		ESP_ERROR_CHECK(esp_wifi_start());
-
 		wifi_scan_config_t cfg;
 		cfg.ssid = NULL;
 		cfg.bssid = NULL;
@@ -460,16 +452,21 @@ pre(currentState == WiFiState::idle)
 			debugPrintfAlways("found network %s\n", ap_records[i].ssid);
 			if (strongestNetwork < 0 || ap_records[i].rssi > ap_records[strongestNetwork].rssi)
 			{
-				if (RetrieveSsidData((const char*)ap_records[i].ssid, wp) > 0)
+				WirelessConfigurationData temp;
+				if (RetrieveSsidData((const char*)ap_records[i].ssid, temp) > 0)
 				{
 					strongestNetwork = i;
 				}
 			}
 		}
 
+		char ssid[SsidLength] = { 0 };
+
+		if (strongestNetwork >= 0) {
+			strncpy(ssid, (const char*)ap_records[strongestNetwork].ssid, SsidLength);
+		}
+
 		free(ap_records);
-		esp_wifi_stop();
-		scanning = false;
 
 		if (strongestNetwork < 0)
 		{
@@ -477,7 +474,7 @@ pre(currentState == WiFiState::idle)
 			return;
 		}
 
-		ssidIdx = strongestNetwork;
+		ssidIdx = RetrieveSsidData(ssid, wp);
 	}
 	else
 	{
