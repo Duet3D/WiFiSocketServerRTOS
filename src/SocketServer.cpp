@@ -207,6 +207,8 @@ pre(currentState == NetworkState::idle)
 {
 	SafeStrncpy(currentSsid, apData.ssid, ARRAY_SIZE(currentSsid));
 
+	esp_wifi_restore();
+
 	ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA) );
 
 	wifi_config_t wifi_config;
@@ -522,6 +524,7 @@ void StartAccessPoint()
 
 	if (ValidApData(apData))
 	{
+		esp_wifi_restore();
 		esp_err_t res = esp_wifi_set_mode(WIFI_MODE_AP);
 
 		SafeStrncpy(currentSsid, apData.ssid, ARRAY_SIZE(currentSsid));
