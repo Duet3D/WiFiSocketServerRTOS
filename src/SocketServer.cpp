@@ -648,7 +648,7 @@ void IRAM_ATTR ProcessRequest()
 	bool deferCommand = false;
 
 	// Begin the transaction
-	gpio_set_level(SamSSPin, 0);             // assert CS to SAM
+	gpio_set_level(SamSSPin, 0);		// assert CS to SAM
 	hspi.beginTransaction();
 
 	// Exchange headers, except for the last dword which will contain our response
@@ -1049,7 +1049,7 @@ void IRAM_ATTR ProcessRequest()
 		}
 	}
 
-	gpio_set_level(SamSSPin, 1);             // de-assert CS to SAM to end the transaction and tell SAM the transfer is complete
+	gpio_set_level(SamSSPin, 1);			// de-assert CS to SAM to end the transaction and tell SAM the transfer is complete
 	hspi.endTransaction();
 
 	// If we deferred the command until after sending the response (e.g. because it may take some time to execute), complete it now
@@ -1191,9 +1191,9 @@ void loop()
 	gpio_set_level(EspReqTransferPin, 1);					// tell the SAM we are ready to receive a command
 	esp_task_wdt_reset();									// kick the watchdog
 
-	if (   (lastError != prevLastError || connectErrorChanged || currentState != prevCurrentState)
+	if (	(lastError != prevLastError || connectErrorChanged || currentState != prevCurrentState)
 		|| ((lastError != nullptr || currentState != lastReportedState) && millis() - lastStatusReportTime > StatusReportMillis)
-	   )
+		)
 	{
 	 	ets_delay_us(2);									// make sure the pin stays high for long enough for the SAM to see it
 		gpio_set_level(EspReqTransferPin, 0);			// force a low to high transition to signal that an error message is available

@@ -98,7 +98,7 @@ void HSPIClass::end() {
 
 // Begin a transaction without changing settings
 void IRAM_ATTR HSPIClass::beginTransaction() {
-    while(REG(SPI_CMD(HSPI)) & SPI_USR) {}
+	while(REG(SPI_CMD(HSPI)) & SPI_USR) {}
 }
 
 void IRAM_ATTR HSPIClass::endTransaction() {
@@ -115,34 +115,34 @@ void HSPIClass::setClockDivider(uint32_t clockDiv)
 	// bit 31 = set to run at sysclock speed
 	// We assume the divider is >1 but <64 so we need only worry about the low bits
 
-    if (clockDiv == 0x80000000)
-    {
-        REG(PERIPHS_IO_MUX) |= (1 << 9); // Set bit 9 if sysclock required
-    }
-    else
-    {
-        REG(PERIPHS_IO_MUX) &= ~(1 << 9);
-    }
-    REG(SPI_CLOCK(HSPI)) = clockDiv;
+	if (clockDiv == 0x80000000)
+	{
+		REG(PERIPHS_IO_MUX) |= (1 << 9); // Set bit 9 if sysclock required
+	}
+	else
+	{
+		REG(PERIPHS_IO_MUX) &= ~(1 << 9);
+	}
+	REG(SPI_CLOCK(HSPI)) = clockDiv;
 }
 
 void HSPIClass::setDataBits(uint16_t bits)
 {
-    const uint32_t mask = ~((SPI_USR_MOSI_BITLEN << SPI_USR_MOSI_BITLEN_S) | (SPI_USR_MISO_BITLEN << SPI_USR_MISO_BITLEN_S));
-    bits--;
-    REG(SPI_USER1(HSPI)) = ((REG(SPI_USER1(HSPI)) & mask) | ((bits << SPI_USR_MOSI_BITLEN_S) | (bits << SPI_USR_MISO_BITLEN_S)));
+	const uint32_t mask = ~((SPI_USR_MOSI_BITLEN << SPI_USR_MOSI_BITLEN_S) | (SPI_USR_MISO_BITLEN << SPI_USR_MISO_BITLEN_S));
+	bits--;
+	REG(SPI_USER1(HSPI)) = ((REG(SPI_USER1(HSPI)) & mask) | ((bits << SPI_USR_MOSI_BITLEN_S) | (bits << SPI_USR_MISO_BITLEN_S)));
 }
 
 uint32_t IRAM_ATTR HSPIClass::transfer32(uint32_t data)
 {
-    while(REG(SPI_CMD(HSPI)) & SPI_USR) {}
-    // Set to 32Bits transfer
-    setDataBits(32);
+	while(REG(SPI_CMD(HSPI)) & SPI_USR) {}
+	// Set to 32Bits transfer
+	setDataBits(32);
 	// LSBFIRST Byte first
 	REG(SPI_W0(HSPI)) = data;
 	REG(SPI_CMD(HSPI)) |= SPI_USR;
-    while(REG(SPI_CMD(HSPI)) & SPI_USR) {}
-    return REG(SPI_W0(HSPI));
+	while(REG(SPI_CMD(HSPI)) & SPI_USR) {}
+	return REG(SPI_W0(HSPI));
 }
 
 /**
@@ -151,51 +151,51 @@ uint32_t IRAM_ATTR HSPIClass::transfer32(uint32_t data)
  * @param size uint32_t
  */
 void IRAM_ATTR HSPIClass::transferDwords(const uint32_t * out, uint32_t * in, uint32_t size) {
-    while(size != 0) {
-        if (size > 16) {
-            transferDwords_(out, in, 16);
-            size -= 16;
-            if(out) out += 16;
-            if(in) in += 16;
-        } else {
-            transferDwords_(out, in, size);
-            size = 0;
-        }
-    }
+	while(size != 0) {
+		if (size > 16) {
+			transferDwords_(out, in, 16);
+			size -= 16;
+			if(out) out += 16;
+			if(in) in += 16;
+		} else {
+			transferDwords_(out, in, size);
+			size = 0;
+		}
+	}
 }
 
 void IRAM_ATTR HSPIClass::transferDwords_(const uint32_t * out, uint32_t * in, uint8_t size) {
-    while(REG(SPI_CMD(HSPI)) & SPI_USR) {}
+	while(REG(SPI_CMD(HSPI)) & SPI_USR) {}
 
-    // Set in/out Bits to transfer
-    setDataBits(size * 32);
+	// Set in/out Bits to transfer
+	setDataBits(size * 32);
 
-    volatile uint32_t * fifoPtr = &REG(SPI_W0(HSPI));
-    uint8_t dataSize = size;
+	volatile uint32_t * fifoPtr = &REG(SPI_W0(HSPI));
+	uint8_t dataSize = size;
 
-    if (out != nullptr) {
-        while(dataSize != 0) {
-            *fifoPtr++ = *out++;
-            dataSize--;
-        }
-    } else {
-        // no out data, so fill with dummy data
-        while(dataSize != 0) {
-            *fifoPtr++ = 0xFFFFFFFF;
-            dataSize--;
-        }
-    }
+	if (out != nullptr) {
+		while(dataSize != 0) {
+			*fifoPtr++ = *out++;
+			dataSize--;
+		}
+	} else {
+		// no out data, so fill with dummy data
+		while(dataSize != 0) {
+			*fifoPtr++ = 0xFFFFFFFF;
+			dataSize--;
+		}
+	}
 
-    REG(SPI_CMD(HSPI)) |= SPI_USR;
-    while(REG(SPI_CMD(HSPI)) & SPI_USR) {}
+	REG(SPI_CMD(HSPI)) |= SPI_USR;
+	while(REG(SPI_CMD(HSPI)) & SPI_USR) {}
 
-    if (in != nullptr) {
-        volatile uint32_t * fifoPtrRd = &REG(SPI_W0(HSPI));
-        while(size != 0) {
-            *in++ = *fifoPtrRd++;
-            size--;
-        }
-    }
+	if (in != nullptr) {
+		volatile uint32_t * fifoPtrRd = &REG(SPI_W0(HSPI));
+		while(size != 0) {
+			*in++ = *fifoPtrRd++;
+			size--;
+		}
+	}
 }
 
 // End
