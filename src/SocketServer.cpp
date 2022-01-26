@@ -1173,8 +1173,8 @@ void setup()
 #else
 //     netbios_init();
 #endif
-    lastError = nullptr;
-    debugPrint("Init completed\n");
+	lastError = nullptr;
+	debugPrint("Init completed\n");
 	gpio_install_isr_service(ESP_INTR_FLAG_IRAM | ESP_INTR_FLAG_EDGE);
 	gpio_isr_handler_add(SamTfrReadyPin, TransferReadyIsr, nullptr);
 	whenLastTransactionFinished = millis();
@@ -1186,7 +1186,7 @@ void setup()
 void loop()
 {
 	gpio_set_level(EspReqTransferPin, 1);					// tell the SAM we are ready to receive a command
-	esp_task_wdt_reset();								    // kick the watchdog
+	esp_task_wdt_reset();									// kick the watchdog
 
 	if (   (lastError != prevLastError || connectErrorChanged || currentState != prevCurrentState)
 		|| ((lastError != nullptr || currentState != lastReportedState) && millis() - lastStatusReportTime > StatusReportMillis)

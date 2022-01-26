@@ -24,12 +24,12 @@ void SafeStrncat(char *dst, const char *src, size_t length)
 
 extern "C" unsigned long millis()
 {
-    return (unsigned long) (esp_timer_get_time() / 1000ULL);
+	return (unsigned long) (esp_timer_get_time() / 1000ULL);
 }
 
 void delay(uint32_t ms)
 {
-    vTaskDelay(ms / portTICK_PERIOD_MS);
+	vTaskDelay(ms / portTICK_PERIOD_MS);
 }
 
 // End
