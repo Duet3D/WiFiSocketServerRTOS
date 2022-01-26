@@ -23,7 +23,6 @@ extern "C"
 }
 
 #include <cstdarg>
-#include <ESP8266WiFi.h>
 #include <DNSServer.h>
 #include "SocketServer.h"
 #include "Config.h"
@@ -104,6 +103,8 @@ static uint32_t transferBuffer[NumDwords(MaxDataLength + 1)];
 static int ssidIdx = -1;
 static const esp_partition_t* ssids = nullptr;
 static bool scanning = false;
+static constexpr int wifiRetries = 2;
+static int wifiRetry = 0;
 
 typedef enum {
 	STATION_IDLE = 0,
@@ -180,21 +181,33 @@ static void wifi_evt_handler(void* arg, esp_event_base_t event_base,
 		}
 	} else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
 		wifi_event_sta_disconnected_t* disconnected = (wifi_event_sta_disconnected_t*) event_data;
-		switch (disconnected->reason) {
-			case WIFI_REASON_AUTH_FAIL:
-				wifiStatus = STATION_WRONG_PASSWORD;
-				break;
-			case WIFI_REASON_NO_AP_FOUND:
-				wifiStatus = STATION_NO_AP_FOUND;
-				break;
-			case WIFI_REASON_ASSOC_LEAVE:
-				wifiStatus = STATION_IDLE;
-				break;
-			default:
-				wifiStatus = STATION_CONNECT_FAIL;
-				break;
+		if (disconnected->reason != WIFI_REASON_ASSOC_LEAVE && wifiRetry < wifiRetries) {
+			if (disconnected->reason == WIFI_REASON_BASIC_RATE_NOT_SUPPORT) {
+				/*Switch to 802.11 bgn mode */
+				esp_wifi_set_protocol(ESP_IF_WIFI_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
+			}
+			wifiStatus = STATION_CONNECTING;
+			wifiRetry++;
+			esp_wifi_connect();
+		} else {
+			wifiRetry = 0;
+			switch (disconnected->reason) {
+				case WIFI_REASON_AUTH_FAIL:
+					wifiStatus = STATION_WRONG_PASSWORD;
+					break;
+				case WIFI_REASON_NO_AP_FOUND:
+					wifiStatus = STATION_NO_AP_FOUND;
+					break;
+				case WIFI_REASON_ASSOC_LEAVE:
+					wifiStatus = STATION_IDLE;
+					break;
+				default:
+					wifiStatus = STATION_CONNECT_FAIL;
+					break;
+			}
 		}
 	} else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
+		wifiRetry = 0;
 		ESP_ERROR_CHECK(tcpip_adapter_set_hostname(TCPIP_ADAPTER_IF_STA, webHostName));
 	} else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
 		wifiStatus = STATION_GOT_IP;
@@ -230,8 +243,6 @@ pre(currentState == NetworkState::idle)
 	debugPrintf("Trying to connect to ssid \"%s\" with password \"%s\"\n", apData.ssid, apData.password);
 	ESP_ERROR_CHECK(esp_wifi_start() );
 
-//	WiFi.setAutoReconnect(false);								// auto reconnect NEVER works in our configuration so disable it, it just wastes time
-	WiFi.setAutoReconnect(true);
 #if NO_WIFI_SLEEP
 	ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));
 #else
