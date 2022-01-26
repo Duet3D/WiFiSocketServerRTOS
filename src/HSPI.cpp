@@ -28,17 +28,6 @@
 #include "esp8266/gpio.h"
 
 
-typedef union {
-        uint32_t regValue;
-        struct {
-                unsigned regL :6;
-                unsigned regH :6;
-                unsigned regN :6;
-                unsigned regPre :13;
-                unsigned regEQU :1;
-        };
-} spiClk_t;
-
 HSPIClass::HSPIClass() {
 }
 
