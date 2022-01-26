@@ -736,7 +736,7 @@ void IRAM_ATTR ProcessRequest()
 			    SafeStrncpy(response->versionText, firmwareVersion, sizeof(response->versionText));
 			    SafeStrncpy(response->hostName, webHostName, sizeof(response->hostName));
 			    SafeStrncpy(response->ssid, currentSsid, sizeof(response->ssid));
-			    response->clockReg = SPI1CLK;
+			    response->clockReg = REG(SPI_CLOCK(HSPI));
 				SendResponse(sizeof(NetworkStatusResponse));
 			}
 			break;
