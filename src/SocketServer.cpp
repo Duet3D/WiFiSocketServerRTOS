@@ -222,8 +222,10 @@ pre(currentState == NetworkState::idle)
 	SafeStrncpy(currentSsid, apData.ssid, ARRAY_SIZE(currentSsid));
 
 	wifi_config_t wifi_config;
-	memcpy(wifi_config.sta.ssid, apData.ssid, sizeof(wifi_config.sta.ssid));
-	memcpy(wifi_config.sta.password, apData.password, sizeof(wifi_config.sta.password));
+	SafeStrncpy((char*)wifi_config.sta.ssid, (char*)apData.ssid,
+		std::min(sizeof(wifi_config.sta.ssid), sizeof(apData.ssid)));
+	SafeStrncpy((char*)wifi_config.sta.password, (char*)apData.password,
+		std::min(sizeof(wifi_config.sta.password), sizeof(apData.password)));
 	ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config) );
 
 	if (apData.ip != 0) {
@@ -460,10 +462,11 @@ pre(currentState == WiFiState::idle)
 			}
 		}
 
-		char ssid[SsidLength] = { 0 };
+		char ssid[SsidLength + 1] = { 0 };
 
 		if (strongestNetwork >= 0) {
-			strncpy(ssid, (const char*)ap_records[strongestNetwork].ssid, SsidLength);
+			SafeStrncpy(ssid, (const char*)ap_records[strongestNetwork].ssid,
+						std::min(sizeof(ssid), sizeof(ap_records[strongestNetwork].ssid)));
 		}
 
 		free(ap_records);
@@ -560,8 +563,10 @@ void StartAccessPoint()
 		if (res == ESP_OK)
 		{
 			wifi_config_t wifi_config;
-			memcpy(wifi_config.ap.ssid, currentSsid, sizeof(wifi_config.ap.ssid));
-			memcpy(wifi_config.ap.password, apData.password, sizeof(wifi_config.ap.password));
+			SafeStrncpy((char*)wifi_config.sta.ssid, currentSsid,
+				std::min(sizeof(wifi_config.sta.ssid), sizeof(currentSsid)));
+			SafeStrncpy((char*)wifi_config.sta.password, (char*)apData.password,
+				std::min(sizeof(wifi_config.sta.password), sizeof(apData.password)));
 			wifi_config.ap.authmode = WIFI_AUTH_WPA_WPA2_PSK;
 			wifi_config.ap.channel = (apData.channel == 0) ? DefaultWiFiChannel : apData.channel;
 			wifi_config.ap.max_connection = 4;
