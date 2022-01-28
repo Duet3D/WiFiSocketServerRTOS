@@ -1426,6 +1426,7 @@ void loop()
 	ConnectPoll();
 	Listener::Poll();
 	Connection::PollOne();
+	Connection::PollReadAll();
 
 	if (currentState == WiFiState::runningAsAccessPoint)
 	{

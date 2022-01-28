@@ -109,12 +109,22 @@ void Connection::PollRead()
 	}
 }
 
+void Connection::PollReadAll()
+{
+	for (size_t i = 0; i < MaxConnections; ++i)
+	{
+		if (connectionList[i]->state == ConnState::connected || connectionList[i]->state == ConnState::otherEndClosed)
+		{
+			connectionList[i]->PollRead();
+		}
+	}
+}
+
 // Perform housekeeping tasks
 void Connection::Poll()
 {
 	if (state == ConnState::connected)
 	{
-		PollRead();
 	}
 	else if (state == ConnState::closeReady)
 	{

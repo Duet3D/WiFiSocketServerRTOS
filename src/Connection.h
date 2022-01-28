@@ -48,6 +48,7 @@ public:
 	static void ReportConnections();
 	static void GetSummarySocketStatus(uint16_t& connectedSockets, uint16_t& otherEndClosedSockets);
 	static void TerminateAll();
+	static void PollReadAll();
 
 private:
 	void FreePbuf();
