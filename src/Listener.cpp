@@ -142,7 +142,7 @@ void Listener::Poll()
 	netconn_set_nonblocking(tempPcb, 1);
 
 	ip_addr_t tempIp;
-	tempIp.addr = ip;
+	tempIp.u_addr.ip4.addr = ip;
 	tempPcb->pcb.tcp->so_options |= SOF_REUSEADDR;			// not sure we need this, but the Arduino HTTP server does it
 	err_t rc = netconn_bind(tempPcb, &tempIp, port);
 	if (rc != ERR_OK)

@@ -580,7 +580,7 @@ void StartAccessPoint()
 				tcpip_adapter_ip_info_t ip_info;
 				ip_info.ip.addr = apData.ip;
 				ip_info.gw.addr = apData.gateway;
-				ip_info.netmask = IPADDR4_INIT_BYTES(255, 255, 255, 0);
+				IP4_ADDR(&ip_info.netmask, 255,255,255,0);
 				res = tcpip_adapter_set_ip_info(TCPIP_ADAPTER_IF_AP, &ip_info);
 
 				if (res == ESP_OK) {
