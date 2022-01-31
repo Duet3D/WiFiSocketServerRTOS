@@ -34,3 +34,12 @@ add_custom_target(ssid_init ALL DEPENDS ${ssid_init})
 add_dependencies(flash ssid_init)
 
 esptool_py_flash_project_args(ssids ${ssids_offset} "${ssid_init}")
+
+idf_build_get_property(python PYTHON)
+idf_build_get_property(idf_target IDF_TARGET)
+idf_component_get_property(esptool_dir esptool_py COMPONENT_DIR)
+idf_build_get_property(build_dir BUILD_DIR)
+
+add_custom_target(image ALL DEPENDS app bootloader
+     COMMAND ${python} "${CMAKE_CURRENT_LIST_DIR}/create_image.py"
+                    "${esptool_dir}" "${build_dir}" "${CMAKE_BINARY_DIR}/DuetWiFiServer.bin")
