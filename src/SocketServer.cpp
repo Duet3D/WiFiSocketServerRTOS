@@ -11,7 +11,6 @@
 
 extern "C"
 {
-	#include "lwip/init.h"			// for version info
 	#include "lwip/stats.h"			// for stats_display()
 }
 
