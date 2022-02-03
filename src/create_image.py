@@ -7,7 +7,6 @@ import os
 import subprocess
 
 argparser = argparse.ArgumentParser()
-argparser.add_argument("esptool_dir", type=str)
 argparser.add_argument("build_dir", type=str)
 argparser.add_argument("output", type=str)
 
@@ -18,9 +17,8 @@ flasher_args = json.load(open(os.path.join(args.build_dir, "flasher_args.json"),
 partition_table = flasher_args["partition_table"]
 app = flasher_args["app"]
 bootloader = flasher_args["bootloader"]
-ssids = flasher_args["ssids"]
 
-bins = [partition_table, app, bootloader, ssids]
+bins = [partition_table, app, bootloader]
 bins.sort(key=lambda b: int(b["offset"], base=16))
 
 with open(args.output, 'wb') as imgfile:

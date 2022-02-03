@@ -20,26 +20,9 @@ target_link_libraries(${COMPONENT_LIB} PUBLIC stubs)
 
 set_source_files_properties("SocketServer.cpp" PROPERTIES COMPILE_FLAGS "-Wno-error=nonnull")
 
-partition_table_get_partition_info(ssids_size "--partition-name ssids" "size")
-partition_table_get_partition_info(ssids_offset "--partition-name ssids" "offset")
-
-set(ssid_init ${build_dir}/ssid_init.bin)
-idf_build_get_property(idf_path IDF_PATH)
 idf_build_get_property(python PYTHON)
-add_custom_command(OUTPUT ${ssid_init}
-     COMMAND ${python} ${idf_path}/components/partition_table/gen_empty_partition.py
-     ${ssids_size} ${ssid_init})
-
-add_custom_target(ssid_init ALL DEPENDS ${ssid_init})
-add_dependencies(flash ssid_init)
-
-esptool_py_flash_project_args(ssids ${ssids_offset} "${ssid_init}")
-
-idf_build_get_property(python PYTHON)
-idf_build_get_property(idf_target IDF_TARGET)
-idf_component_get_property(esptool_dir esptool_py COMPONENT_DIR)
 idf_build_get_property(build_dir BUILD_DIR)
 
-add_custom_target(image ALL DEPENDS app bootloader
+add_custom_target(image ALL DEPENDS app bootloader ${ssid_init}
      COMMAND ${python} "${CMAKE_CURRENT_LIST_DIR}/create_image.py"
-                    "${esptool_dir}" "${build_dir}" "${CMAKE_BINARY_DIR}/DuetWiFiServer.bin")
+                    "${esptool_dir}" "${build_dir}" "${build_dir}/DuetWiFiServer.bin")
