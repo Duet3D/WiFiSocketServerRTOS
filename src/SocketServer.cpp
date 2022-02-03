@@ -857,11 +857,15 @@ void IRAM_ATTR ProcessRequest()
 				case ESP_RST_EXT:
 					response->resetReason = 6; // External reset
 					break;
-				case ESP_RST_SDIO:
-				case ESP_RST_UNKNOWN:
 				case ESP_RST_BROWNOUT:
+					response->resetReason = 7; // Brownout
+					break;
+				case ESP_RST_SDIO:
+					response->resetReason = 8; // SDIO
+					break;
+				case ESP_RST_UNKNOWN:
 				default:
-					response->resetReason = 99; // Out-of-range, translates to 'Unknown' in RRF
+					response->resetReason = 9; // Out-of-range, translates to 'Unknown' in RRF
 					break;
 				}
 
