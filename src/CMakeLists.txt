@@ -15,8 +15,6 @@ idf_component_register(SRCS "${srcs}"
                        PRIV_INCLUDE_DIRS "${priv_include_dirs}"
                        REQUIRES spi_flash mdns)
 
-set_source_files_properties("SocketServer.cpp" PROPERTIES COMPILE_FLAGS "-Wno-error=nonnull")
-
 idf_build_get_property(python PYTHON)
 idf_build_get_property(build_dir BUILD_DIR)
 
