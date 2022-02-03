@@ -9,29 +9,13 @@
 #undef yield
 #undef array
 
-extern "C"
-{
-	#include "lwip/stats.h"			// for stats_display()
-}
-
-#include <cstdarg>
-#include "DNSServer.h"
-#include "SocketServer.h"
-#include "Config.h"
-#include "PooledStrings.h"
-#include "HSPI.h"
-
-#include "include/MessageFormats.h"
-#include "Connection.h"
-#include "Listener.h"
-#include "Misc.h"
-
 #include <cstring>
 #include <algorithm>
 
 extern "C"
 {
 	#include "esp_task_wdt.h"
+	#include "lwip/stats.h"			// for stats_display()
 }
 
 #include "freertos/FreeRTOS.h"
@@ -46,6 +30,17 @@ extern "C"
 
 #include "rom/ets_sys.h"
 #include "driver/gpio.h"
+
+#include "DNSServer.h"
+#include "SocketServer.h"
+#include "Config.h"
+#include "PooledStrings.h"
+#include "HSPI.h"
+
+#include "include/MessageFormats.h"
+#include "Connection.h"
+#include "Listener.h"
+#include "Misc.h"
 
 #include "esp8266/spi.h"
 #include "esp8266/gpio.h"

@@ -12,9 +12,10 @@
 
 #include <cstdint>
 #include <cstddef>
-#include "include/MessageFormats.h"			// for ConnState
 
 #include "lwip/api.h"
+
+#include "include/MessageFormats.h"			// for ConnState
 
 class Connection
 {

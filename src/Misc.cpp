@@ -1,10 +1,10 @@
-#include "Misc.h"
 #include <cstring>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-
 #include "esp_timer.h"
+
+#include "Misc.h"
 
 // Version of strncpy that ensures the result is null terminated
 void SafeStrncpy(char *dst, const char *src, size_t length)

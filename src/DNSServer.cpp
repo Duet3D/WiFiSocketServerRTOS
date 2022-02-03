@@ -1,9 +1,10 @@
 #include <cstring>
 #include <algorithm>
 
+#include <lwip/def.h>
+
 #include "Config.h"
 #include "DNSServer.h"
-#include <lwip/def.h>
 
 void replace(std::string &data, std::string to_replace, std::string replacement)
 {
