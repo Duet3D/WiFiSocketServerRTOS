@@ -164,10 +164,10 @@ struct NetworkStatusResponse
 			zero1 : 4;				// unused, set to zero
 	uint8_t zero2;					// unused, set to zero
 	uint16_t vcc;					// ESP Vcc voltage according to its ADC
-    uint8_t macAddress[6];			// MAC address
-	char versionText[16];			// WiFi firmware version, null terminated
-	char ssid[SsidLength];			// SSID of the router we are connected to, or our own SSID, null terminated
-	char hostName[64];				// name of the access point we are connected to, or our own access point name, null terminated
+	uint8_t macAddress[6];			// MAC address
+	char versionText[16];			// WiFi firmware version
+	char ssid[SsidLength];			// SSID of the router we are connected to, or our own SSDI
+	char hostName[64];				// name of the access point we are connected to, or our own access point name
 	uint32_t clockReg;				// the SPI clock register
 };
 

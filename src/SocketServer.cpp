@@ -1371,8 +1371,8 @@ void setup()
 	// Set up the fast SPI channel
 	hspi.InitMaster(SPI_MODE1, defaultClockControl, true);
 
-    Connection::Init();
-//     Listener::Init();
+	Connection::Init();
+	Listener::Init();
 #if LWIP_VERSION_MAJOR == 2
 //     mdns_resp_init();
 	for (struct netif *item = netif_list; item != nullptr; item = item->next)
@@ -1424,7 +1424,9 @@ void loop()
 	}
 
 	ConnectPoll();
-	// Connection::PollOne();
+	Listener::Poll();
+	Connection::PollOne();
+	Connection::PollReadAll();
 
 	if (currentState == WiFiState::runningAsAccessPoint)
 	{

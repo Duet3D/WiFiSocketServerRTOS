@@ -11,17 +11,16 @@
 #include <cstdint>
 #include <cstddef>
 
-// If we #include "tcp.h" here we get clashes between two different ip_addr.h files, so don't do that here
-class tcp_pcb;
-class pbuf;
+#include "lwip/api.h"
 
 class Listener
 {
 public:
 	Listener();
-	int Accept(tcp_pcb *pcb);
+	void Accept();
 
 	static void Init() { }
+	static void Poll();
 	static bool Listen(uint32_t ip, uint16_t port, uint8_t protocol, uint16_t maxConns);
 	static void StopListening(uint16_t port);
 	static uint16_t GetPortByProtocol(uint8_t protocol);
@@ -34,7 +33,7 @@ private:
 	static void Release(Listener *lst);
 
 	Listener *next;
-	tcp_pcb *listeningPcb;
+	netconn *listeningPcb;
 	uint32_t ip;
 	uint16_t port;
 	uint16_t maxConnections;
