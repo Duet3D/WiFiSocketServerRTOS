@@ -283,7 +283,7 @@ int Connection::Accept(struct netconn *pcb)
 	pb = nullptr;
 	localPort = pcb->pcb.tcp->local_port;
 	remotePort = pcb->pcb.tcp->remote_port;
-	remoteIp = pcb->pcb.tcp->remote_ip.addr;
+	remoteIp = pcb->pcb.tcp->remote_ip.u_addr.ip4.addr;
 	readIndex = alreadyRead = 0;
 	closeTimer = 0;
 	SetState(ConnState::connected);
