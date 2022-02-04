@@ -9,29 +9,13 @@
 #undef yield
 #undef array
 
-extern "C"
-{
-	#include "lwip/stats.h"			// for stats_display()
-}
-
-#include <cstdarg>
-#include "DNSServer.h"
-#include "SocketServer.h"
-#include "Config.h"
-#include "PooledStrings.h"
-#include "HSPI.h"
-
-#include "include/MessageFormats.h"
-#include "Connection.h"
-#include "Listener.h"
-#include "Misc.h"
-
 #include <cstring>
 #include <algorithm>
 
 extern "C"
 {
 	#include "esp_task_wdt.h"
+	#include "lwip/stats.h"			// for stats_display()
 }
 
 #include "freertos/FreeRTOS.h"
@@ -46,6 +30,17 @@ extern "C"
 
 #include "rom/ets_sys.h"
 #include "driver/gpio.h"
+
+#include "DNSServer.h"
+#include "SocketServer.h"
+#include "Config.h"
+#include "PooledStrings.h"
+#include "HSPI.h"
+
+#include "include/MessageFormats.h"
+#include "Connection.h"
+#include "Listener.h"
+#include "Misc.h"
 
 #include "esp8266/spi.h"
 #include "esp8266/gpio.h"
@@ -1312,9 +1307,9 @@ void loop()
 		lastStatusReportTime = millis();
 	}
 
-	// // See whether there is a request from the SAM.
-	// // Duet WiFi 1.04 and earlier have hardware to ensure that TransferReady goes low when a transaction starts.
-	// // Duet 3 Mini doesn't, so we need to see TransferReady go low and then high again. In case that happens so fast that we dn't get the interrupt, we have a timeout.
+	// See whether there is a request from the SAM.
+	// Duet WiFi 1.04 and earlier have hardware to ensure that TransferReady goes low when a transaction starts.
+	// Duet 3 Mini doesn't, so we need to see TransferReady go low and then high again. In case that happens so fast that we dn't get the interrupt, we have a timeout.
 	if (gpio_get_level(SamTfrReadyPin) == 1 && (transferReadyChanged || millis() - whenLastTransactionFinished > TransferReadyTimeout))
 	{
 		transferReadyChanged = false;

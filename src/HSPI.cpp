@@ -18,15 +18,14 @@
  License along with this library; if not, write to the Free Software
  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
-
-#include "HSPI.h"
 #include <cmath>
 
 #include "esp_attr.h"
 
+#include "HSPI.h"
+
 #include "esp8266/spi.h"
 #include "esp8266/gpio.h"
-
 
 HSPIClass::HSPIClass() {
 }

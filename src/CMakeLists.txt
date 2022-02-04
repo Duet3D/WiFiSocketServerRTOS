@@ -1,3 +1,5 @@
+set(CMAKE_CXX_STANDARD 17)
+
 set(srcs "Misc.cpp"
          "Listener.cpp"
          "SocketServer.cpp"
@@ -14,11 +16,6 @@ endif()
 idf_component_register(SRCS "${srcs}"
                        PRIV_INCLUDE_DIRS "${priv_include_dirs}"
                        REQUIRES spi_flash mdns)
-
-add_subdirectory("stubs")
-target_link_libraries(${COMPONENT_LIB} PUBLIC stubs)
-
-set_source_files_properties("SocketServer.cpp" PROPERTIES COMPILE_FLAGS "-Wno-error=nonnull")
 
 idf_build_get_property(python PYTHON)
 idf_build_get_property(build_dir BUILD_DIR)

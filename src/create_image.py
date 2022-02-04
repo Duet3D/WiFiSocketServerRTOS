@@ -4,7 +4,6 @@
 import json
 import argparse
 import os
-import subprocess
 
 argparser = argparse.ArgumentParser()
 argparser.add_argument("build_dir", type=str)

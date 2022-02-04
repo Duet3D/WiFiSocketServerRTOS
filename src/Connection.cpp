@@ -4,15 +4,14 @@
  *  Created on: 11 Apr 2017
  *      Author: David
  */
-
-#include "Connection.h"
-#include "algorithm"			// for std::min
-#include "Misc.h"				// for millis
-#include "Config.h"
-
 #include <cstring> 			// memcpy
+#include <algorithm>			// for std::min
 
 #include "lwip/tcp.h"
+
+#include "Connection.h"
+#include "Misc.h"				// for millis
+#include "Config.h"
 
 const uint32_t MaxAckTime = 4000;		// how long we wait for a connection to acknowledge the remaining data before it is closed
 

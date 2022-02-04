@@ -5,13 +5,11 @@
  *      Author: David
  */
 
+#include "lwip/tcp.h"
+
 #include "Listener.h"
 #include "Connection.h"
 #include "Config.h"
-
-
-#include "lwip/api.h"
-#include "lwip/tcp.h"
 
 // Static member data
 Listener *Listener::activeList = nullptr;
