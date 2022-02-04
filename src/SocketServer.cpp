@@ -15,7 +15,7 @@ extern "C"
 }
 
 #include <cstdarg>
-#include <DNSServer.h>
+#include "DNSServer.h"
 #include "SocketServer.h"
 #include "Config.h"
 #include "PooledStrings.h"
@@ -611,7 +611,9 @@ void StartAccessPoint()
 		{
 			debugPrintAlways("AP started\n");
 			dns.setErrorReplyCode(DNSReplyCode::NoError);
-			if (!dns.start(53, "*", apData.ip))
+			ip_addr_t addr;
+			addr.u_addr.ip4.addr = apData.ip;
+			if (!dns.start(53, "*", addr))
 			{
 				lastError = "Failed to start DNS\n";
 				debugPrintf("%s\n", lastError);
@@ -1327,7 +1329,7 @@ void loop()
 
 	if (currentState == WiFiState::runningAsAccessPoint)
 	{
-	// 	dns.processNextRequest();
+		dns.processNextRequest();
 	}
 	else if (	(currentState == WiFiState::autoReconnecting ||
 				 currentState == WiFiState::connecting ||
