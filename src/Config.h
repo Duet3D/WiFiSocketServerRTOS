@@ -40,9 +40,9 @@ const uint32_t maxSpiFileData = 2048;
 const uint32_t defaultClockControl = 0x2002;		// 80MHz/3, mark:space 2:1
 
 // Pin numbers
-const gpio_num_t SamSSPin = GPIO_NUM_15;          // GPIO15, output to SAM, SS pin for SPI transfer
-const gpio_num_t EspReqTransferPin = GPIO_NUM_0;  // GPIO0, output, indicates to the SAM that we want to send something
-const gpio_num_t SamTfrReadyPin = GPIO_NUM_4;     // GPIO4, input, indicates that SAM is ready to execute an SPI transaction
+const gpio_num_t SamSSPin = GPIO_NUM_15;			// GPIO15, output to SAM, SS pin for SPI transfer
+const gpio_num_t EspReqTransferPin = GPIO_NUM_0;	// GPIO0, output, indicates to the SAM that we want to send something
+const gpio_num_t SamTfrReadyPin = GPIO_NUM_4;		// GPIO4, input, indicates that SAM is ready to execute an SPI transaction
 
 const uint8_t Backlog = 8;
 

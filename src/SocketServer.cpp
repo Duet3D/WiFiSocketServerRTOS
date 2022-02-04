@@ -648,7 +648,7 @@ void IRAM_ATTR ProcessRequest()
 	bool deferCommand = false;
 
 	// Begin the transaction
-	gpio_set_level(SamSSPin, 0);             // assert CS to SAM
+	gpio_set_level(SamSSPin, 0);		// assert CS to SAM
 	hspi.beginTransaction();
 
 	// Exchange headers, except for the last dword which will contain our response
@@ -736,7 +736,7 @@ void IRAM_ATTR ProcessRequest()
 			    SafeStrncpy(response->versionText, firmwareVersion, sizeof(response->versionText));
 			    SafeStrncpy(response->hostName, webHostName, sizeof(response->hostName));
 			    SafeStrncpy(response->ssid, currentSsid, sizeof(response->ssid));
-			    response->clockReg = SPI1CLK;
+			    response->clockReg = REG(SPI_CLOCK(HSPI));
 				SendResponse(sizeof(NetworkStatusResponse));
 			}
 			break;
@@ -1049,7 +1049,7 @@ void IRAM_ATTR ProcessRequest()
 		}
 	}
 
-	gpio_set_level(SamSSPin, 1);             // de-assert CS to SAM to end the transaction and tell SAM the transfer is complete
+	gpio_set_level(SamSSPin, 1);			// de-assert CS to SAM to end the transaction and tell SAM the transfer is complete
 	hspi.endTransaction();
 
 	// If we deferred the command until after sending the response (e.g. because it may take some time to execute), complete it now
@@ -1135,8 +1135,8 @@ void IRAM_ATTR TransferReadyIsr(void *)
 
 void setup()
 {
-    gpio_reset_pin(ONBOARD_LED);
-    gpio_set_direction(ONBOARD_LED, GPIO_MODE_OUTPUT);
+	gpio_reset_pin(ONBOARD_LED);
+	gpio_set_direction(ONBOARD_LED, GPIO_MODE_OUTPUT);
 	gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 
 // 	WiFi.mode(WIFI_OFF);
@@ -1148,18 +1148,19 @@ void setup()
 // 	EEPROM.begin(eepromSizeNeeded);
 
 	// Set up the SPI subsystem
-    gpio_reset_pin(SamTfrReadyPin);
-    gpio_set_direction(SamTfrReadyPin, GPIO_MODE_INPUT);
+	gpio_reset_pin(SamTfrReadyPin);
+	gpio_set_direction(SamTfrReadyPin, GPIO_MODE_INPUT);
 
-    gpio_reset_pin(EspReqTransferPin);
-    gpio_set_direction(EspReqTransferPin, GPIO_MODE_OUTPUT);
+	gpio_reset_pin(EspReqTransferPin);
+	gpio_set_direction(EspReqTransferPin, GPIO_MODE_OUTPUT);
 	gpio_set_level(EspReqTransferPin, 0);
 
-    gpio_reset_pin(SamSSPin);
+	gpio_reset_pin(SamSSPin);
+	gpio_set_direction(SamSSPin, GPIO_MODE_OUTPUT);
 	gpio_set_level(SamSSPin, 1);
 
-    // // Set up the fast SPI channel
-    // hspi.InitMaster(SPI_MODE1, defaultClockControl, true);
+	// Set up the fast SPI channel
+	hspi.InitMaster(SPI_MODE1, defaultClockControl, true);
 
 //     Connection::Init();
 //     Listener::Init();
@@ -1175,8 +1176,10 @@ void setup()
 #endif
 	lastError = nullptr;
 	debugPrint("Init completed\n");
-	gpio_install_isr_service(ESP_INTR_FLAG_IRAM | ESP_INTR_FLAG_EDGE);
+
+	gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
 	gpio_isr_handler_add(SamTfrReadyPin, TransferReadyIsr, nullptr);
+	gpio_set_intr_type(SamTfrReadyPin, GPIO_INTR_POSEDGE);
 	whenLastTransactionFinished = millis();
 	lastStatusReportTime = millis();
 	gpio_set_level(EspReqTransferPin, 1);					// tell the SAM we are ready to receive a command
@@ -1188,9 +1191,9 @@ void loop()
 	gpio_set_level(EspReqTransferPin, 1);					// tell the SAM we are ready to receive a command
 	esp_task_wdt_reset();									// kick the watchdog
 
-	if (   (lastError != prevLastError || connectErrorChanged || currentState != prevCurrentState)
+	if (	(lastError != prevLastError || connectErrorChanged || currentState != prevCurrentState)
 		|| ((lastError != nullptr || currentState != lastReportedState) && millis() - lastStatusReportTime > StatusReportMillis)
-	   )
+		)
 	{
 	 	ets_delay_us(2);									// make sure the pin stays high for long enough for the SAM to see it
 		gpio_set_level(EspReqTransferPin, 0);			// force a low to high transition to signal that an error message is available
