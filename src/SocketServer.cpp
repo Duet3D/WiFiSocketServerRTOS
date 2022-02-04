@@ -11,22 +11,11 @@
 
 extern "C"
 {
-	#include "user_interface.h"     // for struct rst_info
-	#include "lwip/init.h"			// for version info
 	#include "lwip/stats.h"			// for stats_display()
-
-#if LWIP_VERSION_MAJOR == 2
-	#include "lwip/apps/mdns.h"
-	#include "lwip/apps/netbiosns.h"
-#else
-	#include "lwip/app/netbios.h"	// for NetBIOS support
-#endif
 }
 
 #include <cstdarg>
-#include <ESP8266WiFi.h>
-#include <DNSServer.h>
-#include <EEPROM.h>
+#include "DNSServer.h"
 #include "SocketServer.h"
 #include "Config.h"
 #include "PooledStrings.h"
@@ -37,19 +26,37 @@ extern "C"
 #include "Listener.h"
 #include "Misc.h"
 
-const unsigned int ONBOARD_LED = D4;				// GPIO 2
+#include <cstring>
+#include <algorithm>
+
+extern "C"
+{
+	#include "esp_task_wdt.h"
+}
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/event_groups.h"
+#include "esp_netif.h"
+#include "esp_wifi.h"
+#include "esp_system.h"
+#include "esp_attr.h"
+#include "esp_intr_alloc.h"
+#include "esp_partition.h"
+#include "mdns.h"
+
+#include "rom/ets_sys.h"
+#include "driver/gpio.h"
+
+#include "esp8266/spi.h"
+#include "esp8266/gpio.h"
+
+const gpio_num_t ONBOARD_LED = GPIO_NUM_2;			// GPIO 2
 const bool ONBOARD_LED_ON = false;					// active low
 const uint32_t ONBOARD_LED_BLINK_INTERVAL = 500;	// ms
 const uint32_t TransferReadyTimeout = 10;			// how many milliseconds we allow for the Duet to set TransferReady low after the end of a transaction, before we assume that we missed seeing it
 
-#if LWIP_VERSION_MAJOR == 2
-const char * const MdnsProtocolNames[3] = { "HTTP", "FTP", "Telnet" };
 const char * const MdnsServiceStrings[3] = { "_http", "_ftp", "_telnet" };
-const char * const MdnsTxtRecords[2] = { "product=DuetWiFi", "version=" VERSION_MAIN };
-const unsigned int MdnsTtl = 10 * 60;			// same value as on the Duet 0.6/0.8.5
-#else
-# include <ESP8266mDNS.h>
-#endif
+const mdns_txt_item_t MdnsTxtRecords[2] = { {"version", VERSION_MAIN}, {"product", "DuetWiFi"}, };
 
 #define array _ecv_array
 
@@ -77,46 +84,62 @@ static WiFiState currentState = WiFiState::idle,
 				lastReportedState = WiFiState::disabled;
 static uint32_t lastBlinkTime = 0;
 
-ADC_MODE(ADC_VCC);          // need this for the ESP.getVcc() call to work
-
 static HSPIClass hspi;
 static uint32_t connectStartTime;
 static uint32_t lastStatusReportTime;
 static uint32_t transferBuffer[NumDwords(MaxDataLength + 1)];
 
-static const WirelessConfigurationData *ssidData = nullptr;
+static int ssidIdx = -1;
+static const esp_partition_t* ssids = nullptr;
+static constexpr int wifiRetries = 2;
+static int wifiRetry = 0;
+
+typedef enum {
+	STATION_IDLE = 0,
+	STATION_CONNECTING,
+	STATION_WRONG_PASSWORD,
+	STATION_NO_AP_FOUND,
+	STATION_CONNECT_FAIL,
+	STATION_GOT_IP
+} station_status_t;
+
+typedef enum {
+	PHY_MODE_11B	= 1,
+	PHY_MODE_11G	= 2,
+	PHY_MODE_11N	= 3
+} phy_mode_t;
+
+static station_status_t wifiStatus;
+static station_status_t wifi_station_get_connect_status(void) { return wifiStatus; };
 
 // Look up a SSID in our remembered network list, return pointer to it if found
-const WirelessConfigurationData *RetrieveSsidData(const char *ssid, int *index = nullptr)
+int RetrieveSsidData(const char *ssid, WirelessConfigurationData& data)
 {
 	for (size_t i = 1; i <= MaxRememberedNetworks; ++i)
 	{
-		const WirelessConfigurationData *wp = EEPROM.getPtr<WirelessConfigurationData>(i * sizeof(WirelessConfigurationData));
-		if (wp != nullptr && strncmp(ssid, wp->ssid, sizeof(wp->ssid)) == 0)
+		WirelessConfigurationData d;
+		esp_partition_read(ssids, i * sizeof(WirelessConfigurationData), &d, sizeof(WirelessConfigurationData));
+		if (strncmp(ssid, d.ssid, sizeof(d.ssid)) == 0)
 		{
-			if (index != nullptr)
-			{
-				*index = i;
-			}
-			return wp;
+			data = d;
+			return i;
 		}
 	}
-	return nullptr;
+	return -1;
 }
 
-// Find an empty entry in the table of known networks
-bool FindEmptySsidEntry(int *index)
+int FindEmptySsidEntry()
 {
 	for (size_t i = 1; i <= MaxRememberedNetworks; ++i)
 	{
-		const WirelessConfigurationData *wp = EEPROM.getPtr<WirelessConfigurationData>(i * sizeof(WirelessConfigurationData));
-		if (wp != nullptr && wp->ssid[0] == 0xFF)
+		WirelessConfigurationData d;
+		esp_partition_read(ssids, i * sizeof(WirelessConfigurationData), &d, sizeof(WirelessConfigurationData));
+		if (d.ssid[0] == 0xFF)
 		{
-			*index = i;
-			return true;
+			return i;
 		}
 	}
-	return false;
+	return -1;
 }
 
 // Check socket number in range, returning true if yes. Otherwise, set lastError and return false;
@@ -133,13 +156,73 @@ bool ValidSocketNumber(uint8_t num)
 // Reset to default settings
 void FactoryReset()
 {
-	WirelessConfigurationData temp;
-	memset(&temp, 0xFF, sizeof(temp));
-	for (size_t i = 0; i <= MaxRememberedNetworks; ++i)
-	{
-		EEPROM.put(i * sizeof(WirelessConfigurationData), temp);
+	esp_partition_erase_range(ssids, 0, ssids->size);
+}
+
+static void wifi_evt_handler(void* arg, esp_event_base_t event_base,
+								int32_t event_id, void* event_data)
+{
+	if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+			esp_wifi_set_protocol(ESP_IF_WIFI_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
+#if NO_WIFI_SLEEP
+			ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+#else
+			ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));
+#endif
+	} else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+		wifi_event_sta_disconnected_t* disconnected = (wifi_event_sta_disconnected_t*) event_data;
+		if (disconnected->reason != WIFI_REASON_ASSOC_LEAVE && wifiRetry < wifiRetries) {
+			wifiStatus = STATION_CONNECTING;
+			wifiRetry++;
+			esp_wifi_connect();
+		} else {
+			wifiRetry = 0;
+			switch (disconnected->reason) {
+				case WIFI_REASON_AUTH_FAIL:
+					wifiStatus = STATION_WRONG_PASSWORD;
+					break;
+				case WIFI_REASON_NO_AP_FOUND:
+					wifiStatus = STATION_NO_AP_FOUND;
+					break;
+				case WIFI_REASON_ASSOC_LEAVE:
+					wifiStatus = STATION_IDLE;
+					break;
+				default:
+					wifiStatus = STATION_CONNECT_FAIL;
+					break;
+			}
+		}
+	} else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
+		wifiRetry = 0;
+		ESP_ERROR_CHECK(tcpip_adapter_set_hostname(TCPIP_ADAPTER_IF_STA, webHostName));
+	} else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+		wifiStatus = STATION_GOT_IP;
+	} else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_AP_START) {
+		ESP_ERROR_CHECK(tcpip_adapter_dhcps_start(TCPIP_ADAPTER_IF_AP));
 	}
-	EEPROM.commit();
+}
+
+// Rebuild the mDNS services
+void RebuildServices()
+{
+	ESP_ERROR_CHECK(mdns_service_remove_all());
+	ESP_ERROR_CHECK(mdns_hostname_set(webHostName));
+	for (size_t protocol = 0; protocol < 3; protocol++)
+	{
+		const uint16_t port = Listener::GetPortByProtocol(protocol);
+		if (port != 0)
+		{
+			ESP_ERROR_CHECK(mdns_service_add(webHostName, MdnsServiceStrings[protocol], "_tcp", port,
+							(protocol == 0/*HttpProtocol*/) ? (mdns_txt_item_t*)MdnsTxtRecords : nullptr,
+							(protocol == 0/*HttpProtocol*/) ? 2 : 0));
+		}
+	}
+}
+
+void RemoveMdnsServices()
+{
+	mdns_service_remove_all();
+	mdns_free();
 }
 
 // Try to connect using the specified SSID and password
@@ -148,19 +231,25 @@ pre(currentState == NetworkState::idle)
 {
 	SafeStrncpy(currentSsid, apData.ssid, ARRAY_SIZE(currentSsid));
 
-	WiFi.mode(WIFI_STA);
-	wifi_station_set_hostname(webHostName);     				// must do this before calling WiFi.begin()
-	WiFi.setAutoConnect(false);
-//	WiFi.setAutoReconnect(false);								// auto reconnect NEVER works in our configuration so disable it, it just wastes time
-	WiFi.setAutoReconnect(true);
-#if NO_WIFI_SLEEP
-	wifi_set_sleep_type(NONE_SLEEP_T);
-#else
-	wifi_set_sleep_type(MODEM_SLEEP_T);
-#endif
-	WiFi.config(IPAddress(apData.ip), IPAddress(apData.gateway), IPAddress(apData.netmask), IPAddress(), IPAddress());
+	wifi_config_t wifi_config;
+	SafeStrncpy((char*)wifi_config.sta.ssid, (char*)apData.ssid,
+		std::min(sizeof(wifi_config.sta.ssid), sizeof(apData.ssid)));
+	SafeStrncpy((char*)wifi_config.sta.password, (char*)apData.password,
+		std::min(sizeof(wifi_config.sta.password), sizeof(apData.password)));
+	ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config) );
+
+	if (apData.ip != 0) {
+		tcpip_adapter_dhcpc_stop(TCPIP_ADAPTER_IF_STA);
+		tcpip_adapter_ip_info_t ip_info;
+		ip_info.ip.addr = apData.ip;
+		ip_info.gw.addr = apData.gateway;
+		ip_info.netmask.addr = apData.netmask;
+		ESP_ERROR_CHECK(tcpip_adapter_set_ip_info(TCPIP_ADAPTER_IF_STA, &ip_info));
+	}
+
 	debugPrintf("Trying to connect to ssid \"%s\" with password \"%s\"\n", apData.ssid, apData.password);
-	WiFi.begin(apData.ssid, apData.password);
+	wifiStatus = STATION_CONNECTING;
+	esp_wifi_connect();
 
 	if (isRetry)
 	{
@@ -217,18 +306,12 @@ void ConnectPoll()
 			{
 				lastError = "Reconnect succeeded";
 			}
-			else
-			{
-#if LWIP_VERSION_MAJOR == 2
-				mdns_resp_netif_settings_changed(netif_list);	// STA is on first interface
-#else
-				MDNS.begin(webHostName);
-#endif
-			}
+			mdns_init();
+			RebuildServices();
 
 			debugPrint("Connected to AP\n");
 			currentState = WiFiState::connected;
-			digitalWrite(ONBOARD_LED, ONBOARD_LED_ON);
+			gpio_set_level(ONBOARD_LED, ONBOARD_LED_ON);
 			break;
 
 		default:
@@ -247,9 +330,9 @@ void ConnectPoll()
 
 			if (!retry)
 			{
-				WiFi.mode(WIFI_OFF);
+				esp_wifi_stop();
 				currentState = WiFiState::idle;
-				digitalWrite(ONBOARD_LED, !ONBOARD_LED_ON);
+				gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 			}
 		}
 		break;
@@ -275,7 +358,7 @@ void ConnectPoll()
 			case STATION_WRONG_PASSWORD:
 				error = "state 'wrong password'";
 				currentState = WiFiState::idle;
-				digitalWrite(ONBOARD_LED, !ONBOARD_LED_ON);
+				gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 				break;
 
 			case STATION_NO_AP_FOUND:
@@ -291,7 +374,7 @@ void ConnectPoll()
 			default:
 				error = "unknown WiFi state";
 				currentState = WiFiState::idle;
-				digitalWrite(ONBOARD_LED, !ONBOARD_LED_ON);
+				gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 				break;
 			}
 
@@ -329,52 +412,81 @@ void ConnectPoll()
 
 	if (retry)
 	{
-		ConnectToAccessPoint(*ssidData, true);
+		WirelessConfigurationData d;
+		esp_partition_read(ssids, ssidIdx * sizeof(WirelessConfigurationData), &d, sizeof(WirelessConfigurationData));
+		ConnectToAccessPoint(d, true);
 	}
 }
 
 void StartClient(const char * array ssid)
 pre(currentState == WiFiState::idle)
 {
-	ssidData = nullptr;
+	WirelessConfigurationData wp;
+
+	esp_wifi_restore();
+
+	ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+	ESP_ERROR_CHECK(esp_wifi_start());
 
 	if (ssid == nullptr || ssid[0] == 0)
 	{
-		// Auto scan for strongest known network, then try to connect to it
-		const int8_t num_ssids = WiFi.scanNetworks(false, true);
-		if (num_ssids < 0)
-		{
+		wifi_scan_config_t cfg;
+		cfg.ssid = NULL;
+		cfg.bssid = NULL;
+		cfg.show_hidden = true;
+
+		esp_err_t res = esp_wifi_scan_start(&cfg, true);
+
+		if (res != ESP_OK) {
 			lastError = "network scan failed";
 			currentState = WiFiState::idle;
-			digitalWrite(ONBOARD_LED, !ONBOARD_LED_ON);
+			gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 			return;
 		}
+
+		uint16_t num_ssids = 0;
+		esp_wifi_scan_get_ap_num(&num_ssids);
+
+		wifi_ap_record_t *ap_records = (wifi_ap_record_t*) calloc(num_ssids, sizeof(wifi_ap_record_t));
+
+		esp_wifi_scan_get_ap_records(&num_ssids, ap_records);
 
 		// Find the strongest network that we know about
 		int8_t strongestNetwork = -1;
 		for (int8_t i = 0; i < num_ssids; ++i)
 		{
-			debugPrintfAlways("found network %s\n", WiFi.SSID(i).c_str());
-			if (strongestNetwork < 0 || WiFi.RSSI(i) > WiFi.RSSI(strongestNetwork))
+			debugPrintfAlways("found network %s\n", ap_records[i].ssid);
+			if (strongestNetwork < 0 || ap_records[i].rssi > ap_records[strongestNetwork].rssi)
 			{
-				const WirelessConfigurationData *wp = RetrieveSsidData(WiFi.SSID(i).c_str(), nullptr);
-				if (wp != nullptr)
+				WirelessConfigurationData temp;
+				if (RetrieveSsidData((const char*)ap_records[i].ssid, temp) > 0)
 				{
 					strongestNetwork = i;
-					ssidData = wp;
 				}
 			}
 		}
+
+		char ssid[SsidLength + 1] = { 0 };
+
+		if (strongestNetwork >= 0) {
+			SafeStrncpy(ssid, (const char*)ap_records[strongestNetwork].ssid,
+						std::min(sizeof(ssid), sizeof(ap_records[strongestNetwork].ssid)));
+		}
+
+		free(ap_records);
+
 		if (strongestNetwork < 0)
 		{
 			lastError = "no known networks found";
 			return;
 		}
+
+		ssidIdx = RetrieveSsidData(ssid, wp);
 	}
 	else
 	{
-		ssidData = RetrieveSsidData(ssid, nullptr);
-		if (ssidData == nullptr)
+		ssidIdx = RetrieveSsidData(ssid, wp);
+		if (ssidIdx < 0)
 		{
 			lastError = "no data found for requested SSID";
 			return;
@@ -382,7 +494,7 @@ pre(currentState == WiFiState::idle)
 	}
 
 	// ssidData contains the details of the strongest known access point
-	ConnectToAccessPoint(*ssidData, false);
+	ConnectToAccessPoint(wp, false);
 }
 
 bool CheckValidSSID(const char * array s)
@@ -444,21 +556,43 @@ bool ValidApData(const WirelessConfigurationData &apData)
 void StartAccessPoint()
 {
 	WirelessConfigurationData apData;
-	EEPROM.get(0, apData);
+	esp_partition_read(ssids, 0, &apData, sizeof(WirelessConfigurationData));
 
 	if (ValidApData(apData))
 	{
+		esp_wifi_restore();
+		esp_err_t res = esp_wifi_set_mode(WIFI_MODE_AP);
+
 		SafeStrncpy(currentSsid, apData.ssid, ARRAY_SIZE(currentSsid));
-		bool ok = WiFi.mode(WIFI_AP);
-		if (ok)
+		if (res == ESP_OK)
 		{
-			IPAddress apIP(apData.ip);
-			ok = WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
-			if (ok)
+			wifi_config_t wifi_config;
+			SafeStrncpy((char*)wifi_config.sta.ssid, currentSsid,
+				std::min(sizeof(wifi_config.sta.ssid), sizeof(currentSsid)));
+			SafeStrncpy((char*)wifi_config.sta.password, (char*)apData.password,
+				std::min(sizeof(wifi_config.sta.password), sizeof(apData.password)));
+			wifi_config.ap.authmode = WIFI_AUTH_WPA_WPA2_PSK;
+			wifi_config.ap.channel = (apData.channel == 0) ? DefaultWiFiChannel : apData.channel;
+			wifi_config.ap.max_connection = 4;
+
+			res = esp_wifi_set_config(ESP_IF_WIFI_AP, &wifi_config);
+
+			if (res == ESP_OK)
 			{
-				debugPrintf("Starting AP %s with password \"%s\"\n", currentSsid, apData.password);
-				ok = WiFi.softAP(currentSsid, apData.password, (apData.channel == 0) ? DefaultWiFiChannel : apData.channel);
-				if (!ok)
+				tcpip_adapter_dhcps_stop(TCPIP_ADAPTER_IF_AP);
+
+				tcpip_adapter_ip_info_t ip_info;
+				ip_info.ip.addr = apData.ip;
+				ip_info.gw.addr = apData.gateway;
+				IP4_ADDR(&ip_info.netmask, 255,255,255,0);
+				res = tcpip_adapter_set_ip_info(TCPIP_ADAPTER_IF_AP, &ip_info);
+
+				if (res == ESP_OK) {
+					debugPrintf("Starting AP %s with password \"%s\"\n", currentSsid, apData.password);
+					res = esp_wifi_start();
+				}
+
+				if (res != ESP_OK)
 				{
 					debugPrintAlways("Failed to start AP\n");
 				}
@@ -473,31 +607,31 @@ void StartAccessPoint()
 			debugPrintAlways("Failed to set AP mode\n");
 		}
 
-		if (ok)
+		if (res == ESP_OK)
 		{
 			debugPrintAlways("AP started\n");
 			dns.setErrorReplyCode(DNSReplyCode::NoError);
-			if (!dns.start(53, "*", apData.ip))
+			ip_addr_t addr;
+			addr.u_addr.ip4.addr = apData.ip;
+			if (!dns.start(53, "*", addr))
 			{
 				lastError = "Failed to start DNS\n";
 				debugPrintf("%s\n", lastError);
 			}
+
 			SafeStrncpy(currentSsid, apData.ssid, ARRAY_SIZE(currentSsid));
 			currentState = WiFiState::runningAsAccessPoint;
-			digitalWrite(ONBOARD_LED, ONBOARD_LED_ON);
-#if LWIP_VERSION_MAJOR == 2
-			mdns_resp_netif_settings_changed(netif_list->next);		// AP is on second interface
-#else
-			MDNS.begin(webHostName);
-#endif
+			gpio_set_level(ONBOARD_LED, ONBOARD_LED_ON);
+			mdns_init();
+			RebuildServices();
 		}
 		else
 		{
-			WiFi.mode(WIFI_OFF);
+			esp_wifi_stop();
 			lastError = "Failed to start access point";
 			debugPrintf("%s\n", lastError);
 			currentState = WiFiState::idle;
-			digitalWrite(ONBOARD_LED, !ONBOARD_LED_ON);
+			gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 		}
 	}
 	else
@@ -505,7 +639,7 @@ void StartAccessPoint()
 		lastError = "invalid access point configuration";
 		debugPrintf("%s\n", lastError);
 		currentState = WiFiState::idle;
-		digitalWrite(ONBOARD_LED, !ONBOARD_LED_ON);
+		gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 	}
 }
 
@@ -521,97 +655,11 @@ static union
 	uint32_t asDwords[headerDwords];	// to force alignment
 } messageHeaderOut;
 
-#if LWIP_VERSION_MAJOR == 2
-
-void GetServiceTxtEntries(struct mdns_service *service, void *txt_userdata)
-{
-	for (size_t i = 0; i < ARRAY_SIZE(MdnsTxtRecords); i++)
-	{
-		mdns_resp_add_service_txtitem(service, MdnsTxtRecords[i], strlen(MdnsTxtRecords[i]));
-	}
-}
-
-// Rebuild the mDNS services
-void RebuildServices()
-{
-	for (struct netif *item = netif_list; item != nullptr; item = item->next)
-	{
-		mdns_resp_remove_netif(item);
-		mdns_resp_add_netif(item, webHostName, MdnsTtl);
-		mdns_resp_add_service(item, "echo", "_echo", DNSSD_PROTO_TCP, 0, 0, nullptr, nullptr);
-
-		for (size_t protocol = 0; protocol < 3; protocol++)
-		{
-			const uint16_t port = Listener::GetPortByProtocol(protocol);
-			if (port != 0)
-			{
-				service_get_txt_fn_t txtFunc = (protocol == 0/*HttpProtocol*/) ? GetServiceTxtEntries : nullptr;
-				mdns_resp_add_service(item, webHostName, MdnsServiceStrings[protocol], DNSSD_PROTO_TCP, port, MdnsTtl, txtFunc, nullptr);
-			}
-		}
-
-		mdns_resp_netif_settings_changed(item);
-	}
-}
-
-void RemoveMdnsServices()
-{
-	for (struct netif *item = netif_list; item != nullptr; item = item->next)
-	{
-		mdns_resp_remove_netif(item);
-	}
-}
-
-#else
-
-// Rebuild the MDNS server to advertise a single service
-void AdvertiseService(int service, uint16_t port)
-{
-	static int currentService = -1;
-	static const char * const serviceNames[] = { "http", "tcp", "ftp" };
-
-	if (service != currentService)
-	{
-		currentService = service;
-		MDNS.deleteServices();
-		if (service >= 0 && service < (int)ARRAY_SIZE(serviceNames))
-		{
-			const char* serviceName = serviceNames[service];
-			MDNS.addService(serviceName, "tcp", port);
-			MDNS.addServiceTxt(serviceName, "tcp", "product", "DuetWiFi");
-			MDNS.addServiceTxt(serviceName, "tcp", "version", firmwareVersion);
-		}
-	}
-}
-
-// Rebuild the mDNS services
-void RebuildServices()
-{
-	if (currentState == WiFiState::connected)		// MDNS server only works in station mode
-	{
-		// Unfortunately the official ESP8266 mDNS library only reports one service.
-		// I (chrishamm) tried to use the old mDNS responder, which is also capable of sending
-		// mDNS broadcasts, but the packets it generates are broken and thus not of use.
-		for (int service = 0; service < 3; ++service)
-		{
-			const uint16_t port = Listener::GetPortByProtocol(service);
-			if (port != 0)
-			{
-				AdvertiseService(service, port);
-				return;
-			}
-		}
-
-		AdvertiseService(-1, 0);		// no services to advertise
-	}
-}
-
-#endif
 
 // Send a response.
 // 'response' is the number of byes of response if positive, or the error code if negative.
 // Use only to respond to commands which don't include a data block, or when we don't want to read the data block.
-void ICACHE_RAM_ATTR SendResponse(int32_t response)
+void IRAM_ATTR SendResponse(int32_t response)
 {
 	(void)hspi.transfer32(response);
 	if (response > 0)
@@ -621,7 +669,7 @@ void ICACHE_RAM_ATTR SendResponse(int32_t response)
 }
 
 // This is called when the SAM is asking to transfer data
-void ICACHE_RAM_ATTR ProcessRequest()
+void IRAM_ATTR ProcessRequest()
 {
 	// Set up our own headers
 	messageHeaderIn.hdr.formatVersion = InvalidFormatVersion;
@@ -630,7 +678,7 @@ void ICACHE_RAM_ATTR ProcessRequest()
 	bool deferCommand = false;
 
 	// Begin the transaction
-	digitalWrite(SamSSPin, LOW);            // assert CS to SAM
+	gpio_set_level(SamSSPin, 0);		// assert CS to SAM
 	hspi.beginTransaction();
 
 	// Exchange headers, except for the last dword which will contain our response
@@ -699,26 +747,105 @@ void ICACHE_RAM_ATTR ProcessRequest()
 				const bool runningAsAp = (currentState == WiFiState::runningAsAccessPoint);
 				const bool runningAsStation = (currentState == WiFiState::connected);
 				NetworkStatusResponse * const response = reinterpret_cast<NetworkStatusResponse*>(transferBuffer);
-				response->ipAddress = (runningAsAp)
-										? static_cast<uint32_t>(WiFi.softAPIP())
-										: (runningAsStation)
-										  ? static_cast<uint32_t>(WiFi.localIP())
-											  : 0;
-				response->freeHeap = system_get_free_heap_size();
-				response->resetReason = system_get_rst_info()->reason;
-				response->flashSize = 1u << ((spi_flash_get_id() >> 16) & 0xFF);
-				response->rssi = (runningAsStation) ? wifi_station_get_rssi() : 0;
-				response->numClients = (runningAsAp) ? wifi_softap_get_station_num() : 0;
-				response->sleepMode = (uint8_t)wifi_get_sleep_type() + 1;
-				response->phyMode = (uint8_t)wifi_get_phy_mode();
+				response->freeHeap = esp_get_free_heap_size();
+
+				switch (esp_reset_reason())
+				{
+				case ESP_RST_POWERON:
+					response->resetReason = 0; // Power-on
+					break;
+				case ESP_RST_WDT:
+					response->resetReason = 1; // Hardware watchdog
+					break;
+				case ESP_RST_PANIC:
+					response->resetReason = 2; // Exception
+					break;
+				case ESP_RST_TASK_WDT:
+				case ESP_RST_INT_WDT:
+					response->resetReason = 3; // Software watchdog
+					break;
+				case ESP_RST_SW:
+				case ESP_RST_FAST_SW:
+					response->resetReason = 4; // Software-initiated reset
+					break;
+				case ESP_RST_DEEPSLEEP:
+					response->resetReason = 5; // Wake from deep-sleep
+					break;
+				case ESP_RST_EXT:
+					response->resetReason = 6; // External reset
+					break;
+				case ESP_RST_BROWNOUT:
+					response->resetReason = 7; // Brownout
+					break;
+				case ESP_RST_SDIO:
+					response->resetReason = 8; // SDIO
+					break;
+				case ESP_RST_UNKNOWN:
+				default:
+					response->resetReason = 9; // Out-of-range, translates to 'Unknown' in RRF
+					break;
+				}
+
+				if (runningAsStation) {
+					wifi_ap_record_t ap_info;
+					esp_wifi_sta_get_ap_info(&ap_info);
+					response->rssi = ap_info.rssi; 
+					response->numClients = 0;
+					esp_wifi_get_mac(WIFI_IF_STA, response->macAddress);
+					tcpip_adapter_ip_info_t ip_info;
+					tcpip_adapter_get_ip_info(TCPIP_ADAPTER_IF_STA, &ip_info);
+					response->ipAddress = ip_info.ip.addr;
+				} else if (runningAsAp) {
+					wifi_sta_list_t sta_list;
+					esp_wifi_ap_get_sta_list(&sta_list);
+
+					response->numClients = sta_list.num; 
+					response->rssi = 0;
+					esp_wifi_get_mac(WIFI_IF_AP, response->macAddress);
+					tcpip_adapter_ip_info_t ip_info;
+					tcpip_adapter_get_ip_info(TCPIP_ADAPTER_IF_AP, &ip_info);
+					response->ipAddress = ip_info.ip.addr;
+				} else {
+					response->ipAddress = 0;
+				}
+
+				response->flashSize = spi_flash_get_chip_size();
+
+				wifi_ps_type_t ps = WIFI_PS_NONE;
+				esp_wifi_get_ps(&ps);
+
+				switch (ps)
+				{
+				case WIFI_PS_NONE:
+					response->sleepMode = 1;
+					break;
+				case WIFI_PS_MIN_MODEM:
+					response->sleepMode = 3;
+					break;
+				default:	
+					// sleepMode = 2 (light sleep) is not set by firmware.
+					break;
+				}
+
+				uint8_t phyMode;	
+				esp_wifi_get_protocol(ESP_IF_WIFI_STA, &phyMode);
+
+
+				if (phyMode | WIFI_PROTOCOL_11N) {
+					response->phyMode = PHY_MODE_11N;
+				} else if (phyMode | WIFI_PROTOCOL_11G) {
+					response->phyMode = PHY_MODE_11G;
+				} else if (phyMode | WIFI_PROTOCOL_11B) {
+					response->phyMode = PHY_MODE_11B;
+				}
+
 				response->zero1 = 0;
 				response->zero2 = 0;
-				response->vcc = system_get_vdd33();
-			    wifi_get_macaddr((runningAsAp) ? SOFTAP_IF : STATION_IF, response->macAddress);
-			    SafeStrncpy(response->versionText, firmwareVersion, sizeof(response->versionText));
-			    SafeStrncpy(response->hostName, webHostName, sizeof(response->hostName));
-			    SafeStrncpy(response->ssid, currentSsid, sizeof(response->ssid));
-			    response->clockReg = SPI1CLK;
+				response->vcc = esp_wifi_get_vdd33();
+				SafeStrncpy(response->versionText, firmwareVersion, sizeof(response->versionText));
+				SafeStrncpy(response->hostName, webHostName, sizeof(response->hostName));
+				SafeStrncpy(response->ssid, currentSsid, sizeof(response->ssid));
+				response->clockReg = REG(SPI_CLOCK(HSPI));
 				SendResponse(sizeof(NetworkStatusResponse));
 			}
 			break;
@@ -737,18 +864,17 @@ void ICACHE_RAM_ATTR ProcessRequest()
 				}
 				else
 				{
-					index = -1;
-					(void)RetrieveSsidData(receivedClientData->ssid, &index);
+					WirelessConfigurationData d;
+					index = RetrieveSsidData(receivedClientData->ssid, d);
 					if (index < 0)
 					{
-						(void)FindEmptySsidEntry(&index);
+						index = FindEmptySsidEntry();
 					}
 				}
 
 				if (index >= 0)
 				{
-					EEPROM.put(index * sizeof(WirelessConfigurationData), *receivedClientData);
-					EEPROM.commit();
+					esp_partition_write(ssids, index * sizeof(WirelessConfigurationData), receivedClientData, sizeof(WirelessConfigurationData));
 				}
 				else
 				{
@@ -767,13 +893,15 @@ void ICACHE_RAM_ATTR ProcessRequest()
 				messageHeaderIn.hdr.param32 = hspi.transfer32(ResponseEmpty);
 				hspi.transferDwords(nullptr, transferBuffer, NumDwords(SsidLength));
 
-				int index;
-				if (RetrieveSsidData(reinterpret_cast<char*>(transferBuffer), &index) != nullptr)
+				WirelessConfigurationData d;
+				int index = RetrieveSsidData(reinterpret_cast<char*>(transferBuffer), d);
+
+				if (index >= 0)
 				{
 					WirelessConfigurationData localSsidData;
 					memset(&localSsidData, 0xFF, sizeof(localSsidData));
-					EEPROM.put(index * sizeof(WirelessConfigurationData), localSsidData);
-					EEPROM.commit();
+
+					esp_partition_write(ssids, index * sizeof(WirelessConfigurationData), &localSsidData, sizeof(WirelessConfigurationData));
 				}
 				else
 				{
@@ -796,10 +924,12 @@ void ICACHE_RAM_ATTR ProcessRequest()
 				char *p = reinterpret_cast<char*>(transferBuffer);
 				for (size_t i = 0; i <= MaxRememberedNetworks && (i + 1) * ReducedWirelessConfigurationDataSize <= dataBufferAvailable; ++i)
 				{
-					const WirelessConfigurationData * const tempData = EEPROM.getPtr<WirelessConfigurationData>(i * sizeof(WirelessConfigurationData));
-					if (tempData->ssid[0] != 0xFF)
+
+					WirelessConfigurationData tempData;
+					esp_partition_read(ssids, i * sizeof(WirelessConfigurationData), &tempData, sizeof(WirelessConfigurationData));
+					if (tempData.ssid[0] != 0xFF)
 					{
-						memcpy(p, tempData, ReducedWirelessConfigurationDataSize);
+						memcpy(p, &tempData, ReducedWirelessConfigurationDataSize);
 						p += ReducedWirelessConfigurationDataSize;
 					}
 					else if (i == 0)
@@ -818,12 +948,13 @@ void ICACHE_RAM_ATTR ProcessRequest()
 				char *p = reinterpret_cast<char*>(transferBuffer);
 				for (size_t i = 0; i <= MaxRememberedNetworks; ++i)
 				{
-					const WirelessConfigurationData * const tempData = EEPROM.getPtr<WirelessConfigurationData>(i * sizeof(WirelessConfigurationData));
-					if (tempData->ssid[0] != 0xFF)
+					WirelessConfigurationData tempData;
+					esp_partition_read(ssids, i * sizeof(WirelessConfigurationData), &tempData, sizeof(WirelessConfigurationData));
+					if (tempData.ssid[0] != 0xFF)
 					{
-						for (size_t j = 0; j < SsidLength && tempData->ssid[j] != 0; ++j)
+						for (size_t j = 0; j < SsidLength && tempData.ssid[j] != 0; ++j)
 						{
-							*p++ = tempData->ssid[j];
+							*p++ = tempData.ssid[j];
 						}
 						*p++ = '\n';
 					}
@@ -853,9 +984,6 @@ void ICACHE_RAM_ATTR ProcessRequest()
 				hspi.transferDwords(nullptr, transferBuffer, NumDwords(HostNameLength));
 				memcpy(webHostName, transferBuffer, HostNameLength);
 				webHostName[HostNameLength] = 0;			// ensure null terminator
-#if LWIP_VERSION_MAJOR == 2
-				netbiosns_set_name(webHostName);
-#endif
 			}
 			else
 			{
@@ -1008,7 +1136,7 @@ void ICACHE_RAM_ATTR ProcessRequest()
 				const uint8_t txPower = messageHeaderIn.hdr.flags;
 				if (txPower <= 82)
 				{
-					system_phy_set_max_tpw(txPower);
+					esp_wifi_set_max_tx_power(txPower);
 					SendResponse(ResponseEmpty);
 				}
 				else
@@ -1031,7 +1159,7 @@ void ICACHE_RAM_ATTR ProcessRequest()
 		}
 	}
 
-	digitalWrite(SamSSPin, HIGH);     						// de-assert CS to SAM to end the transaction and tell SAM the transfer is complete
+	gpio_set_level(SamSSPin, 1);			// de-assert CS to SAM to end the transaction and tell SAM the transfer is complete
 	hspi.endTransaction();
 
 	// If we deferred the command until after sending the response (e.g. because it may take some time to execute), complete it now
@@ -1060,25 +1188,20 @@ void ICACHE_RAM_ATTR ProcessRequest()
 			Connection::TerminateAll();						// terminate all connections
 			Listener::StopListening(0);						// stop listening on all ports
 			RebuildServices();								// remove the MDNS services
+			RemoveMdnsServices();
 			switch (currentState)
 			{
 			case WiFiState::connected:
 			case WiFiState::connecting:
 			case WiFiState::reconnecting:
-#if LWIP_VERSION_MAJOR == 2
-				RemoveMdnsServices();
-#endif
-#if LWIP_VERSION_MAJOR == 1
-				MDNS.deleteServices();
-#endif
 				delay(20);									// try to give lwip time to recover from stopping everything
-				WiFi.disconnect(true);
+				esp_wifi_disconnect();
 				break;
 
 			case WiFiState::runningAsAccessPoint:
 				dns.stop();
 				delay(20);									// try to give lwip time to recover from stopping everything
-				WiFi.softAPdisconnect(true);
+				esp_wifi_disconnect();
 				break;
 
 			default:
@@ -1086,7 +1209,7 @@ void ICACHE_RAM_ATTR ProcessRequest()
 			}
 			delay(100);
 			currentState = WiFiState::idle;
-			digitalWrite(ONBOARD_LED, !ONBOARD_LED_ON);
+			gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 			break;
 
 		case NetworkCommand::networkFactoryReset:			// clear remembered list, reset factory defaults
@@ -1110,90 +1233,89 @@ void ICACHE_RAM_ATTR ProcessRequest()
 	}
 }
 
-void ICACHE_RAM_ATTR TransferReadyIsr()
+void IRAM_ATTR TransferReadyIsr(void *)
 {
 	transferReadyChanged = true;
 }
 
+
 void setup()
 {
-	// Enable serial port for debugging
-	Serial.begin(WiFiBaudRate);
-	Serial.setDebugOutput(true);
+	gpio_reset_pin(ONBOARD_LED);
+	gpio_set_direction(ONBOARD_LED, GPIO_MODE_OUTPUT);
+	gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 
-	// Turn off LED
-	pinMode(ONBOARD_LED, OUTPUT);
-	digitalWrite(ONBOARD_LED, !ONBOARD_LED_ON);
+	tcpip_adapter_init();
 
-	WiFi.mode(WIFI_OFF);
-	WiFi.persistent(false);
+	ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-	// If we started abnormally, send the exception details to the serial port
-	const rst_info *resetInfo = system_get_rst_info();
-	if (resetInfo->reason != 0 && resetInfo->reason != 6)	// if not power up or external reset
-	{
-		debugPrintfAlways("Restart after exception:%d flag:%d epc1:0x%08x epc2:0x%08x epc3:0x%08x excvaddr:0x%08x depc:0x%08x\n",
-			resetInfo->exccause, resetInfo->reason, resetInfo->epc1, resetInfo->epc2, resetInfo->epc3, resetInfo->excvaddr, resetInfo->depc);
-	}
+	ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_evt_handler, NULL));
+	ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, ESP_EVENT_ANY_ID, &wifi_evt_handler, NULL));
 
-	// Reserve some flash space for use as EEPROM. The maximum EEPROM supported by the core is SPI_FLASH_SEC_SIZE (4Kb).
+	wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+	cfg.nvs_enable = false;
+	ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
+	wifiStatus = STATION_IDLE;
+
+	ssids = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, 
+													 ESP_PARTITION_SUBTYPE_DATA_NVS, 
+													 "ssids");
+
 	const size_t eepromSizeNeeded = (MaxRememberedNetworks + 1) * sizeof(WirelessConfigurationData);
-	static_assert(eepromSizeNeeded <= SPI_FLASH_SEC_SIZE, "Insufficient EEPROM");
-	EEPROM.begin(eepromSizeNeeded);
+	assert(eepromSizeNeeded < ssids->size);
 
 	// Set up the SPI subsystem
-    pinMode(SamTfrReadyPin, INPUT);
-    pinMode(EspReqTransferPin, OUTPUT);
-    digitalWrite(EspReqTransferPin, LOW);				// not ready to transfer data yet
-    pinMode(SamSSPin, OUTPUT);
-    digitalWrite(SamSSPin, HIGH);
+	gpio_reset_pin(SamTfrReadyPin);
+	gpio_set_direction(SamTfrReadyPin, GPIO_MODE_INPUT);
 
-    // Set up the fast SPI channel
-    hspi.InitMaster(SPI_MODE1, defaultClockControl, true);
+	gpio_reset_pin(EspReqTransferPin);
+	gpio_set_direction(EspReqTransferPin, GPIO_MODE_OUTPUT);
+	gpio_set_level(EspReqTransferPin, 0);
 
-    Connection::Init();
-    Listener::Init();
-#if LWIP_VERSION_MAJOR == 2
-    mdns_resp_init();
-	for (struct netif *item = netif_list; item != nullptr; item = item->next)
-	{
-		mdns_resp_add_netif(item, webHostName, MdnsTtl);
-	}
-    netbiosns_init();
-#else
-    netbios_init();
-#endif
-    lastError = nullptr;
-    debugPrint("Init completed\n");
-	attachInterrupt(SamTfrReadyPin, TransferReadyIsr, CHANGE);
+	gpio_reset_pin(SamSSPin);
+	gpio_set_direction(SamSSPin, GPIO_MODE_OUTPUT);
+	gpio_set_level(SamSSPin, 1);
+
+	// Set up the fast SPI channel
+	hspi.InitMaster(SPI_MODE1, defaultClockControl, true);
+
+	Connection::Init();
+	Listener::Init();
+	lastError = nullptr;
+	debugPrint("Init completed\n");
+
+	gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
+	gpio_isr_handler_add(SamTfrReadyPin, TransferReadyIsr, nullptr);
+	gpio_set_intr_type(SamTfrReadyPin, GPIO_INTR_POSEDGE);
 	whenLastTransactionFinished = millis();
 	lastStatusReportTime = millis();
-	digitalWrite(EspReqTransferPin, HIGH);				// tell the SAM we are ready to receive a command
+	gpio_set_level(EspReqTransferPin, 1);					// tell the SAM we are ready to receive a command
 }
 
 void loop()
 {
-	digitalWrite(EspReqTransferPin, HIGH);				// tell the SAM we are ready to receive a command
-	system_soft_wdt_feed();								// kick the watchdog
+	gpio_set_level(EspReqTransferPin, 1);					// tell the SAM we are ready to receive a command
+	esp_task_wdt_reset();									// kick the watchdog
 
-	if (   (lastError != prevLastError || connectErrorChanged || currentState != prevCurrentState)
+	if (	(lastError != prevLastError || connectErrorChanged || currentState != prevCurrentState)
 		|| ((lastError != nullptr || currentState != lastReportedState) && millis() - lastStatusReportTime > StatusReportMillis)
-	   )
+		)
 	{
-		delayMicroseconds(2);							// make sure the pin stays high for long enough for the SAM to see it
-		digitalWrite(EspReqTransferPin, LOW);			// force a low to high transition to signal that an error message is available
-		delayMicroseconds(2);							// make sure it is low enough to create an interrupt when it goes high
-		digitalWrite(EspReqTransferPin, HIGH);			// tell the SAM we are ready to receive a command
+	 	ets_delay_us(2);									// make sure the pin stays high for long enough for the SAM to see it
+		gpio_set_level(EspReqTransferPin, 0);			// force a low to high transition to signal that an error message is available
+		ets_delay_us(2);									// make sure it is low enough to create an interrupt when it goes high
+		gpio_set_level(EspReqTransferPin, 1);			// tell the SAM we are ready to receive a command
 		prevLastError = lastError;
 		prevCurrentState = currentState;
 		connectErrorChanged = false;
 		lastStatusReportTime = millis();
 	}
 
-	// See whether there is a request from the SAM.
-	// Duet WiFi 1.04 and earlier have hardware to ensure that TransferReady goes low when a transaction starts.
-	// Duet 3 Mini doesn't, so we need to see TransferReady go low and then high again. In case that happens so fast that we dn't get the interrupt, we have a timeout.
-	if (digitalRead(SamTfrReadyPin) == HIGH && (transferReadyChanged || millis() - whenLastTransactionFinished > TransferReadyTimeout))
+	// // See whether there is a request from the SAM.
+	// // Duet WiFi 1.04 and earlier have hardware to ensure that TransferReady goes low when a transaction starts.
+	// // Duet 3 Mini doesn't, so we need to see TransferReady go low and then high again. In case that happens so fast that we dn't get the interrupt, we have a timeout.
+	if (gpio_get_level(SamTfrReadyPin) == 1 && (transferReadyChanged || millis() - whenLastTransactionFinished > TransferReadyTimeout))
 	{
 		transferReadyChanged = false;
 		ProcessRequest();
@@ -1201,7 +1323,9 @@ void loop()
 	}
 
 	ConnectPoll();
+	Listener::Poll();
 	Connection::PollOne();
+	Connection::PollReadAll();
 
 	if (currentState == WiFiState::runningAsAccessPoint)
 	{
@@ -1213,7 +1337,7 @@ void loop()
 				(millis() - lastBlinkTime > ONBOARD_LED_BLINK_INTERVAL))
 	{
 		lastBlinkTime = millis();
-		digitalWrite(ONBOARD_LED, !digitalRead(ONBOARD_LED));
+		gpio_set_level(ONBOARD_LED, !gpio_get_level(ONBOARD_LED));
 	}
 }
 

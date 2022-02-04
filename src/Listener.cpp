@@ -9,25 +9,9 @@
 #include "Connection.h"
 #include "Config.h"
 
-#include <HardwareSerial.h>
 
-// C interface functions
-extern "C"
-{
-	#include "lwip/tcp.h"
-	#include "lwip/err.h"
-
-	static err_t conn_accept(void *arg, tcp_pcb *pcb, err_t err)
-	{
-		LWIP_UNUSED_ARG(err);
-		if (arg != nullptr)
-		{
-			return ((Listener*)arg)->Accept(pcb);
-		}
-		tcp_abort(pcb);
-		return ERR_ABRT;
-	}
-}
+#include "lwip/api.h"
+#include "lwip/tcp.h"
 
 // Static member data
 Listener *Listener::activeList = nullptr;
@@ -39,51 +23,70 @@ Listener::Listener()
 {
 }
 
-int Listener::Accept(tcp_pcb *pcb)
+void Listener::Accept()
 {
 	if (listeningPcb != nullptr)
 	{
-		// Allocate a free socket for this connection
-		const uint16_t numConns = Connection::CountConnectionsOnPort(port);
-		if (numConns < maxConnections)
-		{
-			Connection * const conn = Connection::Allocate();
-			if (conn != nullptr)
+		struct netconn *newConn;
+		err_t rc = netconn_accept(listeningPcb, &newConn); // tell the listening PCB we have accepted the connectionv
+
+		if (rc == ERR_OK) {
+			// Allocate a free socket for this connection
+			const uint16_t numConns = Connection::CountConnectionsOnPort(port);
+			if (numConns < maxConnections)
 			{
-				tcp_accepted(listeningPcb);		// tell the listening PCB we have accepted the connection
-				const int rslt = conn->Accept(pcb);
-				if (protocol == protocolFtpData)
+				Connection * const conn = Connection::Allocate();
+				if (conn != nullptr)
 				{
-					debugPrintf("accept conn, stop listen on port %u\n", port);
-					Stop();						// don't listen for further connections
+					netconn_set_nonblocking(newConn, 1);
+					rc = conn->Accept(newConn);
+					if (protocol == protocolFtpData)
+					{
+						debugPrintf("accept conn, stop listen on port %u\n", port);
+						Stop();						// don't listen for further connections
+					}
+
+					if (rc == ERR_OK) {
+						return;
+					}
 				}
-				return rslt;
+				debugPrintfAlways("refused conn on port %u no free conn\n", port);
 			}
-			debugPrintfAlways("refused conn on port %u no free conn\n", port);
-		}
-		else
-		{
-			debugPrintfAlways("refused conn on port %u already %u conns\n", port, numConns);
+			else
+			{
+				debugPrintfAlways("refused conn on port %u already %u conns\n", port, numConns);
+			}
+
+			netconn_close(newConn);
+			netconn_delete(newConn);
 		}
 	}
 	else
 	{
 		debugPrintfAlways("refused conn on port %u no pcb\n", port);
 	}
-	tcp_abort(pcb);
-	return ERR_ABRT;
 }
 
 void Listener::Stop()
 {
 	if (listeningPcb != nullptr)
 	{
-		tcp_arg(listeningPcb, nullptr);
-		tcp_close(listeningPcb);			// stop listening and free the PCB
+		netconn_close(listeningPcb);		// stop listening and free the PCB
+		netconn_delete(listeningPcb);
 		listeningPcb = nullptr;
 	}
 	Unlink(this);
 	Release(this);
+}
+
+void Listener::Poll()
+{
+	for (Listener *p = activeList; p != nullptr; )
+	{
+		Listener *n = p->next;
+		p->Accept();
+		p = n;
+	}
 }
 
 // Set up a listener on a port, returning true if successful, or stop listening of maxConnections = 0
@@ -115,6 +118,7 @@ void Listener::Stop()
 		return true;
 	}
 
+
 	// If we get here then we need to set up a new listener
 	Listener * const p = Allocate();
 	if (p == nullptr)
@@ -128,35 +132,39 @@ void Listener::Stop()
 	p->maxConnections = maxConns;
 
 	// Call LWIP to set up a listener
-	tcp_pcb* const tempPcb = tcp_new();
+	struct netconn * tempPcb = netconn_new ( NETCONN_TCP );
 	if (tempPcb == nullptr)
 	{
 		Release(p);
 		debugPrintAlways("can't allocate PCB\n");
 		return false;
 	}
+	netconn_set_nonblocking(tempPcb, 1);
 
 	ip_addr_t tempIp;
-	tempIp.addr = ip;
-	tempPcb->so_options |= SOF_REUSEADDR;			// not sure we need this, but the Arduino HTTP server does it
-	err_t rc = tcp_bind(tempPcb, &tempIp, port);
+	tempIp.u_addr.ip4.addr = ip;
+	tempPcb->pcb.tcp->so_options |= SOF_REUSEADDR;			// not sure we need this, but the Arduino HTTP server does it
+	err_t rc = netconn_bind(tempPcb, &tempIp, port);
 	if (rc != ERR_OK)
 	{
-		tcp_close(tempPcb);
+		netconn_close(tempPcb);
+		netconn_delete(tempPcb);
 		Release(p);
 		debugPrintfAlways("can't bind PCB: %d\n", (int)rc);
 		return false;
 	}
-	p->listeningPcb = tcp_listen_with_backlog(tempPcb, Backlog);
-	if (p->listeningPcb == nullptr)
+
+	rc = netconn_listen_with_backlog(tempPcb, Backlog);
+	if (rc != ERR_OK)
 	{
-		tcp_close(tempPcb);
+		netconn_close(tempPcb);
+		netconn_delete(tempPcb);
 		Release(p);
 		debugPrintAlways("tcp_listen failed\n");
 		return false;
 	}
-	tcp_arg(p->listeningPcb, p);
-	tcp_accept(p->listeningPcb, conn_accept);
+
+	p->listeningPcb = tempPcb;
 	// Don't call tcp_err in the LISTEN state because lwip gives us an assertion failure at tcp.s(1760)
 	p->next = activeList;
 	activeList = p;

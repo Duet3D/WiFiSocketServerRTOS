@@ -54,3 +54,11 @@ Bugs.txt
 # Output folders
 /Release/
 /Debug/
+
+
+# RTOS SDK and ESP-IDF
+build
+sdkconfig
+
+# VSCode
+.vscode
