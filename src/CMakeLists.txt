@@ -1,3 +1,5 @@
+set(CMAKE_CXX_STANDARD 17)
+
 set(srcs "Misc.cpp"
          "Listener.cpp"
          "SocketServer.cpp"
