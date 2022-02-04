@@ -30,6 +30,44 @@ user@pc:/path/to/ESP8266_RTOS_SDK$ . ./export.sh
 user@pc:/path/to/DuetWiFiSocketServer$ idf.py build
 ```
 
+or 
+
+```console
+user@pc:/path/to/DuetWiFiSocketServer$ make
+```
+
+### Command Line (Windows)
+
+1. Setup the environment according to [these instructions](https://docs.espressif.com/projects/esp8266-rtos-sdk/en/latest/get-started/windows-setup.html).
+
+2. Download/clone the latest [ESP8266 RTOS SDK release](https://github.com/espressif/ESP8266_RTOS_SDK). If the release ZIP file was downloaded, extract to your desired directory.
+3. Navigate to the ESP8266 RTOS SDK directory and execute the install script.
+
+```console
+user@pc:/path/to/ESP8266_RTOS_SDK$ ./install.sh
+```
+
+4. Export environment variables for current terminal session.
+
+
+```console
+user@pc:/path/to/ESP8266_RTOS_SDK$ . ./export.sh
+```
+
+5. Navigate to the DuetWiFiSocketServer directory and execute the build command. Once the build finishes, `DuetWiFiServer.bin`  will be in the `build` directory.
+
+
+```console
+user@pc:/path/to/DuetWiFiSocketServer$ make
+```
+
+
+### Eclipse
+
+Instructions for setting up building with Eclipse can be found [here](https://docs.espressif.com/projects/esp8266-rtos-sdk/en/latest/get-started/eclipse-setup.html.) for Linux/macOS and [here](https://docs.espressif.com/projects/esp8266-rtos-sdk/en/latest/get-started/eclipse-setup-windows.html#eclipse-windows-setup) for Windows.
+
+Import this project in the `Import New Project` step.
+
 ## Links
 
 [Forum](https://forum.duet3d.com/) [Wiki](https://duet3d.dozuki.com/)
