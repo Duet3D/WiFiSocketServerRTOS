@@ -26,7 +26,6 @@ extern "C"
 #include <cstdarg>
 #include <ESP8266WiFi.h>
 #include <DNSServer.h>
-#include <EEPROM.h>
 #include "SocketServer.h"
 #include "Config.h"
 #include "PooledStrings.h"
@@ -48,6 +47,7 @@ extern "C"
 #include "esp_system.h"
 #include "esp_attr.h"
 #include "esp_intr_alloc.h"
+#include "esp_partition.h"
 
 #include "rom/ets_sys.h"
 #include "driver/gpio.h"
@@ -102,39 +102,37 @@ static uint32_t connectStartTime;
 static uint32_t lastStatusReportTime;
 static uint32_t transferBuffer[NumDwords(MaxDataLength + 1)];
 
-static const WirelessConfigurationData *ssidData = nullptr;
+static int ssidIdx = -1;
+static const esp_partition_t* ssids = nullptr;
 
 // Look up a SSID in our remembered network list, return pointer to it if found
-const WirelessConfigurationData *RetrieveSsidData(const char *ssid, int *index = nullptr)
+int RetrieveSsidData(const char *ssid, WirelessConfigurationData& data)
 {
 	for (size_t i = 1; i <= MaxRememberedNetworks; ++i)
 	{
-		const WirelessConfigurationData *wp = EEPROM.getPtr<WirelessConfigurationData>(i * sizeof(WirelessConfigurationData));
-		if (wp != nullptr && strncmp(ssid, wp->ssid, sizeof(wp->ssid)) == 0)
+		WirelessConfigurationData d;
+		esp_partition_read(ssids, i * sizeof(WirelessConfigurationData), &d, sizeof(WirelessConfigurationData));
+		if (strncmp(ssid, d.ssid, sizeof(d.ssid)) == 0)
 		{
-			if (index != nullptr)
-			{
-				*index = i;
-			}
-			return wp;
+			memcpy(&data, &d, sizeof(data));
+			return i;
 		}
 	}
-	return nullptr;
+	return -1;
 }
 
-// Find an empty entry in the table of known networks
-bool FindEmptySsidEntry(int *index)
+int FindEmptySsidEntry()
 {
 	for (size_t i = 1; i <= MaxRememberedNetworks; ++i)
 	{
-		const WirelessConfigurationData *wp = EEPROM.getPtr<WirelessConfigurationData>(i * sizeof(WirelessConfigurationData));
-		if (wp != nullptr && wp->ssid[0] == 0xFF)
+		WirelessConfigurationData d;
+		esp_partition_read(ssids, i * sizeof(WirelessConfigurationData), &d, sizeof(WirelessConfigurationData));
+		if (d.ssid[0] == 0xFF)
 		{
-			*index = i;
-			return true;
+			return i;
 		}
 	}
-	return false;
+	return -1;
 }
 
 // Check socket number in range, returning true if yes. Otherwise, set lastError and return false;
@@ -151,13 +149,7 @@ bool ValidSocketNumber(uint8_t num)
 // Reset to default settings
 void FactoryReset()
 {
-	WirelessConfigurationData temp;
-	memset(&temp, 0xFF, sizeof(temp));
-	for (size_t i = 0; i <= MaxRememberedNetworks; ++i)
-	{
-		EEPROM.put(i * sizeof(WirelessConfigurationData), temp);
-	}
-	EEPROM.commit();
+	esp_partition_erase_range(ssids, 0, ssids->size);
 }
 
 // Try to connect using the specified SSID and password
@@ -347,14 +339,16 @@ void ConnectPoll()
 
 	if (retry)
 	{
-		ConnectToAccessPoint(*ssidData, true);
+		WirelessConfigurationData d;
+		esp_partition_read(ssids, ssidIdx * sizeof(WirelessConfigurationData), &d, sizeof(WirelessConfigurationData));
+		ConnectToAccessPoint(d, true);
 	}
 }
 
 void StartClient(const char * array ssid)
 pre(currentState == WiFiState::idle)
 {
-	ssidData = nullptr;
+	WirelessConfigurationData wp;
 
 	if (ssid == nullptr || ssid[0] == 0)
 	{
@@ -375,11 +369,9 @@ pre(currentState == WiFiState::idle)
 			debugPrintfAlways("found network %s\n", WiFi.SSID(i).c_str());
 			if (strongestNetwork < 0 || WiFi.RSSI(i) > WiFi.RSSI(strongestNetwork))
 			{
-				const WirelessConfigurationData *wp = RetrieveSsidData(WiFi.SSID(i).c_str(), nullptr);
-				if (wp != nullptr)
+				if (RetrieveSsidData(WiFi.SSID(i).c_str(), wp) > 0)
 				{
 					strongestNetwork = i;
-					ssidData = wp;
 				}
 			}
 		}
@@ -388,11 +380,13 @@ pre(currentState == WiFiState::idle)
 			lastError = "no known networks found";
 			return;
 		}
+
+		ssidIdx = strongestNetwork;
 	}
 	else
 	{
-		ssidData = RetrieveSsidData(ssid, nullptr);
-		if (ssidData == nullptr)
+		ssidIdx = RetrieveSsidData(ssid, wp);
+		if (ssidIdx < 0)
 		{
 			lastError = "no data found for requested SSID";
 			return;
@@ -400,7 +394,7 @@ pre(currentState == WiFiState::idle)
 	}
 
 	// ssidData contains the details of the strongest known access point
-	ConnectToAccessPoint(*ssidData, false);
+	ConnectToAccessPoint(wp, false);
 }
 
 bool CheckValidSSID(const char * array s)
@@ -462,7 +456,7 @@ bool ValidApData(const WirelessConfigurationData &apData)
 void StartAccessPoint()
 {
 	WirelessConfigurationData apData;
-	EEPROM.get(0, apData);
+	esp_partition_read(ssids, 0, &apData, sizeof(WirelessConfigurationData));
 
 	if (ValidApData(apData))
 	{
@@ -724,7 +718,7 @@ void IRAM_ATTR ProcessRequest()
 											  : 0;
 				response->freeHeap = system_get_free_heap_size();
 				response->resetReason = system_get_rst_info()->reason;
-				response->flashSize = 1u << ((spi_flash_get_id() >> 16) & 0xFF);
+				response->flashSize = spi_flash_get_chip_size();
 				response->rssi = (runningAsStation) ? wifi_station_get_rssi() : 0;
 				response->numClients = (runningAsAp) ? wifi_softap_get_station_num() : 0;
 				response->sleepMode = (uint8_t)wifi_get_sleep_type() + 1;
@@ -755,18 +749,17 @@ void IRAM_ATTR ProcessRequest()
 				}
 				else
 				{
-					index = -1;
-					(void)RetrieveSsidData(receivedClientData->ssid, &index);
+					WirelessConfigurationData d;
+					index = RetrieveSsidData(receivedClientData->ssid, d);
 					if (index < 0)
 					{
-						(void)FindEmptySsidEntry(&index);
+						index = FindEmptySsidEntry();
 					}
 				}
 
 				if (index >= 0)
 				{
-					EEPROM.put(index * sizeof(WirelessConfigurationData), *receivedClientData);
-					EEPROM.commit();
+					esp_partition_write(ssids, index * sizeof(WirelessConfigurationData), receivedClientData, sizeof(WirelessConfigurationData));
 				}
 				else
 				{
@@ -785,13 +778,15 @@ void IRAM_ATTR ProcessRequest()
 				messageHeaderIn.hdr.param32 = hspi.transfer32(ResponseEmpty);
 				hspi.transferDwords(nullptr, transferBuffer, NumDwords(SsidLength));
 
-				int index;
-				if (RetrieveSsidData(reinterpret_cast<char*>(transferBuffer), &index) != nullptr)
+				WirelessConfigurationData d;
+				int index = RetrieveSsidData(reinterpret_cast<char*>(transferBuffer), d);
+
+				if (index >= 0)
 				{
 					WirelessConfigurationData localSsidData;
 					memset(&localSsidData, 0xFF, sizeof(localSsidData));
-					EEPROM.put(index * sizeof(WirelessConfigurationData), localSsidData);
-					EEPROM.commit();
+
+					esp_partition_write(ssids, index * sizeof(WirelessConfigurationData), &localSsidData, sizeof(WirelessConfigurationData));
 				}
 				else
 				{
@@ -814,10 +809,12 @@ void IRAM_ATTR ProcessRequest()
 				char *p = reinterpret_cast<char*>(transferBuffer);
 				for (size_t i = 0; i <= MaxRememberedNetworks && (i + 1) * ReducedWirelessConfigurationDataSize <= dataBufferAvailable; ++i)
 				{
-					const WirelessConfigurationData * const tempData = EEPROM.getPtr<WirelessConfigurationData>(i * sizeof(WirelessConfigurationData));
-					if (tempData->ssid[0] != 0xFF)
+
+					WirelessConfigurationData tempData;
+					esp_partition_read(ssids, i * sizeof(WirelessConfigurationData), &tempData, sizeof(WirelessConfigurationData));
+					if (tempData.ssid[0] != 0xFF)
 					{
-						memcpy(p, tempData, ReducedWirelessConfigurationDataSize);
+						memcpy(p, &tempData, ReducedWirelessConfigurationDataSize);
 						p += ReducedWirelessConfigurationDataSize;
 					}
 					else if (i == 0)
@@ -836,12 +833,13 @@ void IRAM_ATTR ProcessRequest()
 				char *p = reinterpret_cast<char*>(transferBuffer);
 				for (size_t i = 0; i <= MaxRememberedNetworks; ++i)
 				{
-					const WirelessConfigurationData * const tempData = EEPROM.getPtr<WirelessConfigurationData>(i * sizeof(WirelessConfigurationData));
-					if (tempData->ssid[0] != 0xFF)
+					WirelessConfigurationData tempData;
+					esp_partition_read(ssids, i * sizeof(WirelessConfigurationData), &tempData, sizeof(WirelessConfigurationData));
+					if (tempData.ssid[0] != 0xFF)
 					{
-						for (size_t j = 0; j < SsidLength && tempData->ssid[j] != 0; ++j)
+						for (size_t j = 0; j < SsidLength && tempData.ssid[j] != 0; ++j)
 						{
-							*p++ = tempData->ssid[j];
+							*p++ = tempData.ssid[j];
 						}
 						*p++ = '\n';
 					}
@@ -1142,10 +1140,13 @@ void setup()
 // 	WiFi.mode(WIFI_OFF);
 // 	WiFi.persistent(false);
 
-// 	// Reserve some flash space for use as EEPROM. The maximum EEPROM supported by the core is SPI_FLASH_SEC_SIZE (4Kb).
-// 	const size_t eepromSizeNeeded = (MaxRememberedNetworks + 1) * sizeof(WirelessConfigurationData);
-// 	static_assert(eepromSizeNeeded <= SPI_FLASH_SEC_SIZE, "Insufficient EEPROM");
-// 	EEPROM.begin(eepromSizeNeeded);
+	ssids = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, 
+													 ESP_PARTITION_SUBTYPE_DATA_NVS, 
+													 "ssids");
+
+	const size_t eepromSizeNeeded = (MaxRememberedNetworks + 1) * sizeof(WirelessConfigurationData);
+	assert(eepromSizeNeeded < ssids->size);
+
 
 	// Set up the SPI subsystem
 	gpio_reset_pin(SamTfrReadyPin);
