@@ -11,7 +11,6 @@
 
 extern "C"
 {
-	#include "user_interface.h"     // for struct rst_info
 	#include "lwip/init.h"			// for version info
 	#include "lwip/stats.h"			// for stats_display()
 
@@ -24,7 +23,6 @@ extern "C"
 }
 
 #include <cstdarg>
-#include <ESP8266WiFi.h>
 #include <DNSServer.h>
 #include "SocketServer.h"
 #include "Config.h"
@@ -44,6 +42,10 @@ extern "C"
 	#include "esp_task_wdt.h"
 }
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/event_groups.h"
+#include "esp_netif.h"
+#include "esp_wifi.h"
 #include "esp_system.h"
 #include "esp_attr.h"
 #include "esp_intr_alloc.h"
@@ -95,8 +97,6 @@ static WiFiState currentState = WiFiState::idle,
 				lastReportedState = WiFiState::disabled;
 static uint32_t lastBlinkTime = 0;
 
-ADC_MODE(ADC_VCC);          // need this for the ESP.getVcc() call to work
-
 static HSPIClass hspi;
 static uint32_t connectStartTime;
 static uint32_t lastStatusReportTime;
@@ -104,6 +104,26 @@ static uint32_t transferBuffer[NumDwords(MaxDataLength + 1)];
 
 static int ssidIdx = -1;
 static const esp_partition_t* ssids = nullptr;
+static constexpr int wifiRetries = 2;
+static int wifiRetry = 0;
+
+typedef enum {
+	STATION_IDLE = 0,
+	STATION_CONNECTING,
+	STATION_WRONG_PASSWORD,
+	STATION_NO_AP_FOUND,
+	STATION_CONNECT_FAIL,
+	STATION_GOT_IP
+} station_status_t;
+
+typedef enum {
+	PHY_MODE_11B	= 1,
+	PHY_MODE_11G	= 2,
+	PHY_MODE_11N	= 3
+} phy_mode_t;
+
+static station_status_t wifiStatus;
+static station_status_t wifi_station_get_connect_status(void) { return wifiStatus; };
 
 // Look up a SSID in our remembered network list, return pointer to it if found
 int RetrieveSsidData(const char *ssid, WirelessConfigurationData& data)
@@ -114,7 +134,7 @@ int RetrieveSsidData(const char *ssid, WirelessConfigurationData& data)
 		esp_partition_read(ssids, i * sizeof(WirelessConfigurationData), &d, sizeof(WirelessConfigurationData));
 		if (strncmp(ssid, d.ssid, sizeof(d.ssid)) == 0)
 		{
-			memcpy(&data, &d, sizeof(data));
+			data = d;
 			return i;
 		}
 	}
@@ -152,25 +172,74 @@ void FactoryReset()
 	esp_partition_erase_range(ssids, 0, ssids->size);
 }
 
+static void wifi_evt_handler(void* arg, esp_event_base_t event_base,
+								int32_t event_id, void* event_data)
+{
+	if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+			esp_wifi_set_protocol(ESP_IF_WIFI_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
+#if NO_WIFI_SLEEP
+			ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+#else
+			ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));
+#endif
+	} else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+		wifi_event_sta_disconnected_t* disconnected = (wifi_event_sta_disconnected_t*) event_data;
+		if (disconnected->reason != WIFI_REASON_ASSOC_LEAVE && wifiRetry < wifiRetries) {
+			wifiStatus = STATION_CONNECTING;
+			wifiRetry++;
+			esp_wifi_connect();
+		} else {
+			wifiRetry = 0;
+			switch (disconnected->reason) {
+				case WIFI_REASON_AUTH_FAIL:
+					wifiStatus = STATION_WRONG_PASSWORD;
+					break;
+				case WIFI_REASON_NO_AP_FOUND:
+					wifiStatus = STATION_NO_AP_FOUND;
+					break;
+				case WIFI_REASON_ASSOC_LEAVE:
+					wifiStatus = STATION_IDLE;
+					break;
+				default:
+					wifiStatus = STATION_CONNECT_FAIL;
+					break;
+			}
+		}
+	} else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
+		wifiRetry = 0;
+		ESP_ERROR_CHECK(tcpip_adapter_set_hostname(TCPIP_ADAPTER_IF_STA, webHostName));
+	} else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+		wifiStatus = STATION_GOT_IP;
+	} else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_AP_START) {
+		ESP_ERROR_CHECK(tcpip_adapter_dhcps_start(TCPIP_ADAPTER_IF_AP));
+	}
+}
+
 // Try to connect using the specified SSID and password
 void ConnectToAccessPoint(const WirelessConfigurationData& apData, bool isRetry)
 pre(currentState == NetworkState::idle)
 {
 	SafeStrncpy(currentSsid, apData.ssid, ARRAY_SIZE(currentSsid));
 
-	WiFi.mode(WIFI_STA);
-	wifi_station_set_hostname(webHostName);     				// must do this before calling WiFi.begin()
-	WiFi.setAutoConnect(false);
-//	WiFi.setAutoReconnect(false);								// auto reconnect NEVER works in our configuration so disable it, it just wastes time
-	WiFi.setAutoReconnect(true);
-#if NO_WIFI_SLEEP
-	wifi_set_sleep_type(NONE_SLEEP_T);
-#else
-	wifi_set_sleep_type(MODEM_SLEEP_T);
-#endif
-	WiFi.config(IPAddress(apData.ip), IPAddress(apData.gateway), IPAddress(apData.netmask), IPAddress(), IPAddress());
+	wifi_config_t wifi_config;
+	SafeStrncpy((char*)wifi_config.sta.ssid, (char*)apData.ssid,
+		std::min(sizeof(wifi_config.sta.ssid), sizeof(apData.ssid)));
+	SafeStrncpy((char*)wifi_config.sta.password, (char*)apData.password,
+		std::min(sizeof(wifi_config.sta.password), sizeof(apData.password)));
+	ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config) );
+
+	if (apData.ip != 0) {
+		tcpip_adapter_dhcpc_stop(TCPIP_ADAPTER_IF_STA);
+		tcpip_adapter_ip_info_t ip_info;
+		ip_info.ip.addr = apData.ip;
+		ip_info.gw.addr = apData.gateway;
+		ip_info.netmask.addr = apData.netmask;
+		ESP_ERROR_CHECK(tcpip_adapter_set_ip_info(TCPIP_ADAPTER_IF_STA, &ip_info));
+	}
+
 	debugPrintf("Trying to connect to ssid \"%s\" with password \"%s\"\n", apData.ssid, apData.password);
-	WiFi.begin(apData.ssid, apData.password);
+	wifiStatus = STATION_CONNECTING;
+	esp_wifi_connect();
 
 	if (isRetry)
 	{
@@ -229,11 +298,11 @@ void ConnectPoll()
 			}
 			else
 			{
-#if LWIP_VERSION_MAJOR == 2
-				mdns_resp_netif_settings_changed(netif_list);	// STA is on first interface
-#else
-				MDNS.begin(webHostName);
-#endif
+// #if LWIP_VERSION_MAJOR == 2
+// 				mdns_resp_netif_settings_changed(netif_list);	// STA is on first interface
+// #else
+// 				MDNS.begin(webHostName);
+// #endif
 			}
 
 			debugPrint("Connected to AP\n");
@@ -257,7 +326,7 @@ void ConnectPoll()
 
 			if (!retry)
 			{
-				WiFi.mode(WIFI_OFF);
+				esp_wifi_stop();
 				currentState = WiFiState::idle;
 				gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 			}
@@ -350,38 +419,65 @@ pre(currentState == WiFiState::idle)
 {
 	WirelessConfigurationData wp;
 
+	esp_wifi_restore();
+
+	ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+	ESP_ERROR_CHECK(esp_wifi_start());
+
 	if (ssid == nullptr || ssid[0] == 0)
 	{
-		// Auto scan for strongest known network, then try to connect to it
-		const int8_t num_ssids = WiFi.scanNetworks(false, true);
-		if (num_ssids < 0)
-		{
+		wifi_scan_config_t cfg;
+		cfg.ssid = NULL;
+		cfg.bssid = NULL;
+		cfg.show_hidden = true;
+
+		esp_err_t res = esp_wifi_scan_start(&cfg, true);
+
+		if (res != ESP_OK) {
 			lastError = "network scan failed";
 			currentState = WiFiState::idle;
 			gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 			return;
 		}
 
+		uint16_t num_ssids = 0;
+		esp_wifi_scan_get_ap_num(&num_ssids);
+
+		wifi_ap_record_t *ap_records = (wifi_ap_record_t*) calloc(num_ssids, sizeof(wifi_ap_record_t));
+
+		esp_wifi_scan_get_ap_records(&num_ssids, ap_records);
+
 		// Find the strongest network that we know about
 		int8_t strongestNetwork = -1;
 		for (int8_t i = 0; i < num_ssids; ++i)
 		{
-			debugPrintfAlways("found network %s\n", WiFi.SSID(i).c_str());
-			if (strongestNetwork < 0 || WiFi.RSSI(i) > WiFi.RSSI(strongestNetwork))
+			debugPrintfAlways("found network %s\n", ap_records[i].ssid);
+			if (strongestNetwork < 0 || ap_records[i].rssi > ap_records[strongestNetwork].rssi)
 			{
-				if (RetrieveSsidData(WiFi.SSID(i).c_str(), wp) > 0)
+				WirelessConfigurationData temp;
+				if (RetrieveSsidData((const char*)ap_records[i].ssid, temp) > 0)
 				{
 					strongestNetwork = i;
 				}
 			}
 		}
+
+		char ssid[SsidLength + 1] = { 0 };
+
+		if (strongestNetwork >= 0) {
+			SafeStrncpy(ssid, (const char*)ap_records[strongestNetwork].ssid,
+						std::min(sizeof(ssid), sizeof(ap_records[strongestNetwork].ssid)));
+		}
+
+		free(ap_records);
+
 		if (strongestNetwork < 0)
 		{
 			lastError = "no known networks found";
 			return;
 		}
 
-		ssidIdx = strongestNetwork;
+		ssidIdx = RetrieveSsidData(ssid, wp);
 	}
 	else
 	{
@@ -460,17 +556,39 @@ void StartAccessPoint()
 
 	if (ValidApData(apData))
 	{
+		esp_wifi_restore();
+		esp_err_t res = esp_wifi_set_mode(WIFI_MODE_AP);
+
 		SafeStrncpy(currentSsid, apData.ssid, ARRAY_SIZE(currentSsid));
-		bool ok = WiFi.mode(WIFI_AP);
-		if (ok)
+		if (res == ESP_OK)
 		{
-			IPAddress apIP(apData.ip);
-			ok = WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
-			if (ok)
+			wifi_config_t wifi_config;
+			SafeStrncpy((char*)wifi_config.sta.ssid, currentSsid,
+				std::min(sizeof(wifi_config.sta.ssid), sizeof(currentSsid)));
+			SafeStrncpy((char*)wifi_config.sta.password, (char*)apData.password,
+				std::min(sizeof(wifi_config.sta.password), sizeof(apData.password)));
+			wifi_config.ap.authmode = WIFI_AUTH_WPA_WPA2_PSK;
+			wifi_config.ap.channel = (apData.channel == 0) ? DefaultWiFiChannel : apData.channel;
+			wifi_config.ap.max_connection = 4;
+
+			res = esp_wifi_set_config(ESP_IF_WIFI_AP, &wifi_config);
+
+			if (res == ESP_OK)
 			{
-				debugPrintf("Starting AP %s with password \"%s\"\n", currentSsid, apData.password);
-				ok = WiFi.softAP(currentSsid, apData.password, (apData.channel == 0) ? DefaultWiFiChannel : apData.channel);
-				if (!ok)
+				tcpip_adapter_dhcps_stop(TCPIP_ADAPTER_IF_AP);
+
+				tcpip_adapter_ip_info_t ip_info;
+				ip_info.ip.addr = apData.ip;
+				ip_info.gw.addr = apData.gateway;
+				ip_info.netmask = IPADDR4_INIT_BYTES(255, 255, 255, 0);
+				res = tcpip_adapter_set_ip_info(TCPIP_ADAPTER_IF_AP, &ip_info);
+
+				if (res == ESP_OK) {
+					debugPrintf("Starting AP %s with password \"%s\"\n", currentSsid, apData.password);
+					res = esp_wifi_start();
+				}
+
+				if (res != ESP_OK)
 				{
 					debugPrintAlways("Failed to start AP\n");
 				}
@@ -485,7 +603,7 @@ void StartAccessPoint()
 			debugPrintAlways("Failed to set AP mode\n");
 		}
 
-		if (ok)
+		if (res == ESP_OK)
 		{
 			debugPrintAlways("AP started\n");
 			dns.setErrorReplyCode(DNSReplyCode::NoError);
@@ -494,18 +612,19 @@ void StartAccessPoint()
 				lastError = "Failed to start DNS\n";
 				debugPrintf("%s\n", lastError);
 			}
+
 			SafeStrncpy(currentSsid, apData.ssid, ARRAY_SIZE(currentSsid));
 			currentState = WiFiState::runningAsAccessPoint;
 			gpio_set_level(ONBOARD_LED, ONBOARD_LED_ON);
-#if LWIP_VERSION_MAJOR == 2
-			mdns_resp_netif_settings_changed(netif_list->next);		// AP is on second interface
-#else
-			MDNS.begin(webHostName);
-#endif
+// #if LWIP_VERSION_MAJOR == 2
+// 			mdns_resp_netif_settings_changed(netif_list->next);		// AP is on second interface
+// #else
+// 			MDNS.begin(webHostName);
+// #endif
 		}
 		else
 		{
-			WiFi.mode(WIFI_OFF);
+			esp_wifi_stop();
 			lastError = "Failed to start access point";
 			debugPrintf("%s\n", lastError);
 			currentState = WiFiState::idle;
@@ -533,92 +652,92 @@ static union
 	uint32_t asDwords[headerDwords];	// to force alignment
 } messageHeaderOut;
 
-#if LWIP_VERSION_MAJOR == 2
+// #if LWIP_VERSION_MAJOR == 2
 
-void GetServiceTxtEntries(struct mdns_service *service, void *txt_userdata)
-{
-	for (size_t i = 0; i < ARRAY_SIZE(MdnsTxtRecords); i++)
-	{
-		mdns_resp_add_service_txtitem(service, MdnsTxtRecords[i], strlen(MdnsTxtRecords[i]));
-	}
-}
+// void GetServiceTxtEntries(struct mdns_service *service, void *txt_userdata)
+// {
+// 	for (size_t i = 0; i < ARRAY_SIZE(MdnsTxtRecords); i++)
+// 	{
+// 		mdns_resp_add_service_txtitem(service, MdnsTxtRecords[i], strlen(MdnsTxtRecords[i]));
+// 	}
+// }
 
-// Rebuild the mDNS services
-void RebuildServices()
-{
-	for (struct netif *item = netif_list; item != nullptr; item = item->next)
-	{
-		mdns_resp_remove_netif(item);
-		mdns_resp_add_netif(item, webHostName, MdnsTtl);
-		mdns_resp_add_service(item, "echo", "_echo", DNSSD_PROTO_TCP, 0, 0, nullptr, nullptr);
+// // Rebuild the mDNS services
+// void RebuildServices()
+// {
+// 	for (struct netif *item = netif_list; item != nullptr; item = item->next)
+// 	{
+// 		mdns_resp_remove_netif(item);
+// 		mdns_resp_add_netif(item, webHostName, MdnsTtl);
+// 		mdns_resp_add_service(item, "echo", "_echo", DNSSD_PROTO_TCP, 0, 0, nullptr, nullptr);
 
-		for (size_t protocol = 0; protocol < 3; protocol++)
-		{
-			const uint16_t port = Listener::GetPortByProtocol(protocol);
-			if (port != 0)
-			{
-				service_get_txt_fn_t txtFunc = (protocol == 0/*HttpProtocol*/) ? GetServiceTxtEntries : nullptr;
-				mdns_resp_add_service(item, webHostName, MdnsServiceStrings[protocol], DNSSD_PROTO_TCP, port, MdnsTtl, txtFunc, nullptr);
-			}
-		}
+// 		for (size_t protocol = 0; protocol < 3; protocol++)
+// 		{
+// 			const uint16_t port = Listener::GetPortByProtocol(protocol);
+// 			if (port != 0)
+// 			{
+// 				service_get_txt_fn_t txtFunc = (protocol == 0/*HttpProtocol*/) ? GetServiceTxtEntries : nullptr;
+// 				mdns_resp_add_service(item, webHostName, MdnsServiceStrings[protocol], DNSSD_PROTO_TCP, port, MdnsTtl, txtFunc, nullptr);
+// 			}
+// 		}
 
-		mdns_resp_netif_settings_changed(item);
-	}
-}
+// 		mdns_resp_netif_settings_changed(item);
+// 	}
+// }
 
-void RemoveMdnsServices()
-{
-	for (struct netif *item = netif_list; item != nullptr; item = item->next)
-	{
-		mdns_resp_remove_netif(item);
-	}
-}
+// void RemoveMdnsServices()
+// {
+// 	for (struct netif *item = netif_list; item != nullptr; item = item->next)
+// 	{
+// 		mdns_resp_remove_netif(item);
+// 	}
+// }
 
-#else
+// #else
 
-// Rebuild the MDNS server to advertise a single service
-void AdvertiseService(int service, uint16_t port)
-{
-	static int currentService = -1;
-	static const char * const serviceNames[] = { "http", "tcp", "ftp" };
+// // Rebuild the MDNS server to advertise a single service
+// void AdvertiseService(int service, uint16_t port)
+// {
+// 	static int currentService = -1;
+// 	static const char * const serviceNames[] = { "http", "tcp", "ftp" };
 
-	if (service != currentService)
-	{
-		currentService = service;
-		MDNS.deleteServices();
-		if (service >= 0 && service < (int)ARRAY_SIZE(serviceNames))
-		{
-			const char* serviceName = serviceNames[service];
-			MDNS.addService(serviceName, "tcp", port);
-			MDNS.addServiceTxt(serviceName, "tcp", "product", "DuetWiFi");
-			MDNS.addServiceTxt(serviceName, "tcp", "version", firmwareVersion);
-		}
-	}
-}
+// 	if (service != currentService)
+// 	{
+// 		currentService = service;
+// 		MDNS.deleteServices();
+// 		if (service >= 0 && service < (int)ARRAY_SIZE(serviceNames))
+// 		{
+// 			const char* serviceName = serviceNames[service];
+// 			MDNS.addService(serviceName, "tcp", port);
+// 			MDNS.addServiceTxt(serviceName, "tcp", "product", "DuetWiFi");
+// 			MDNS.addServiceTxt(serviceName, "tcp", "version", firmwareVersion);
+// 		}
+// 	}
+// }
 
-// Rebuild the mDNS services
-void RebuildServices()
-{
-	if (currentState == WiFiState::connected)		// MDNS server only works in station mode
-	{
-		// Unfortunately the official ESP8266 mDNS library only reports one service.
-		// I (chrishamm) tried to use the old mDNS responder, which is also capable of sending
-		// mDNS broadcasts, but the packets it generates are broken and thus not of use.
-		for (int service = 0; service < 3; ++service)
-		{
-			const uint16_t port = Listener::GetPortByProtocol(service);
-			if (port != 0)
-			{
-				AdvertiseService(service, port);
-				return;
-			}
-		}
+// // Rebuild the mDNS services
+// void RebuildServices()
+// {
+// 	if (currentState == WiFiState::connected)		// MDNS server only works in station mode
+// 	{
+// 		// Unfortunately the official ESP8266 mDNS library only reports one service.
+// 		// I (chrishamm) tried to use the old mDNS responder, which is also capable of sending
+// 		// mDNS broadcasts, but the packets it generates are broken and thus not of use.
+// 		for (int service = 0; service < 3; ++service)
+// 		{
+// 			const uint16_t port = Listener::GetPortByProtocol(service);
+// 			if (port != 0)
+// 			{
+// 				AdvertiseService(service, port);
+// 				return;
+// 			}
+// 		}
 
-		AdvertiseService(-1, 0);		// no services to advertise
-	}
-}
+// 		AdvertiseService(-1, 0);		// no services to advertise
+// 	}
+// }
 
-#endif
+// #endif
 
 // Send a response.
 // 'response' is the number of byes of response if positive, or the error code if negative.
@@ -711,26 +830,105 @@ void IRAM_ATTR ProcessRequest()
 				const bool runningAsAp = (currentState == WiFiState::runningAsAccessPoint);
 				const bool runningAsStation = (currentState == WiFiState::connected);
 				NetworkStatusResponse * const response = reinterpret_cast<NetworkStatusResponse*>(transferBuffer);
-				response->ipAddress = (runningAsAp)
-										? static_cast<uint32_t>(WiFi.softAPIP())
-										: (runningAsStation)
-										  ? static_cast<uint32_t>(WiFi.localIP())
-											  : 0;
-				response->freeHeap = system_get_free_heap_size();
-				response->resetReason = system_get_rst_info()->reason;
+				response->freeHeap = esp_get_free_heap_size();
+
+				switch (esp_reset_reason())
+				{
+				case ESP_RST_POWERON:
+					response->resetReason = 0; // Power-on
+					break;
+				case ESP_RST_WDT:
+					response->resetReason = 1; // Hardware watchdog
+					break;
+				case ESP_RST_PANIC:
+					response->resetReason = 2; // Exception
+					break;
+				case ESP_RST_TASK_WDT:
+				case ESP_RST_INT_WDT:
+					response->resetReason = 3; // Software watchdog
+					break;
+				case ESP_RST_SW:
+				case ESP_RST_FAST_SW:
+					response->resetReason = 4; // Software-initiated reset
+					break;
+				case ESP_RST_DEEPSLEEP:
+					response->resetReason = 5; // Wake from deep-sleep
+					break;
+				case ESP_RST_EXT:
+					response->resetReason = 6; // External reset
+					break;
+				case ESP_RST_BROWNOUT:
+					response->resetReason = 7; // Brownout
+					break;
+				case ESP_RST_SDIO:
+					response->resetReason = 8; // SDIO
+					break;
+				case ESP_RST_UNKNOWN:
+				default:
+					response->resetReason = 9; // Out-of-range, translates to 'Unknown' in RRF
+					break;
+				}
+
+				if (runningAsStation) {
+					wifi_ap_record_t ap_info;
+					esp_wifi_sta_get_ap_info(&ap_info);
+					response->rssi = ap_info.rssi; 
+					response->numClients = 0;
+					esp_wifi_get_mac(WIFI_IF_STA, response->macAddress);
+					tcpip_adapter_ip_info_t ip_info;
+					tcpip_adapter_get_ip_info(TCPIP_ADAPTER_IF_STA, &ip_info);
+					response->ipAddress = ip_info.ip.addr;
+				} else if (runningAsAp) {
+					wifi_sta_list_t sta_list;
+					esp_wifi_ap_get_sta_list(&sta_list);
+
+					response->numClients = sta_list.num; 
+					response->rssi = 0;
+					esp_wifi_get_mac(WIFI_IF_AP, response->macAddress);
+					tcpip_adapter_ip_info_t ip_info;
+					tcpip_adapter_get_ip_info(TCPIP_ADAPTER_IF_AP, &ip_info);
+					response->ipAddress = ip_info.ip.addr;
+				} else {
+					response->ipAddress = 0;
+				}
+
 				response->flashSize = spi_flash_get_chip_size();
-				response->rssi = (runningAsStation) ? wifi_station_get_rssi() : 0;
-				response->numClients = (runningAsAp) ? wifi_softap_get_station_num() : 0;
-				response->sleepMode = (uint8_t)wifi_get_sleep_type() + 1;
-				response->phyMode = (uint8_t)wifi_get_phy_mode();
+
+				wifi_ps_type_t ps = WIFI_PS_NONE;
+				esp_wifi_get_ps(&ps);
+
+				switch (ps)
+				{
+				case WIFI_PS_NONE:
+					response->sleepMode = 1;
+					break;
+				case WIFI_PS_MIN_MODEM:
+					response->sleepMode = 3;
+					break;
+				default:	
+					// sleepMode = 2 (light sleep) is not set by firmware.
+					break;
+				}
+
+				uint8_t phyMode;	
+				esp_wifi_get_protocol(ESP_IF_WIFI_STA, &phyMode);
+
+
+				if (phyMode | WIFI_PROTOCOL_11N) {
+					response->phyMode = PHY_MODE_11N;
+				} else if (phyMode | WIFI_PROTOCOL_11G) {
+					response->phyMode = PHY_MODE_11G;
+				} else if (phyMode | WIFI_PROTOCOL_11B) {
+					response->phyMode = PHY_MODE_11B;
+				}
+
 				response->zero1 = 0;
 				response->zero2 = 0;
-				response->vcc = system_get_vdd33();
-			    wifi_get_macaddr((runningAsAp) ? SOFTAP_IF : STATION_IF, response->macAddress);
-			    SafeStrncpy(response->versionText, firmwareVersion, sizeof(response->versionText));
-			    SafeStrncpy(response->hostName, webHostName, sizeof(response->hostName));
-			    SafeStrncpy(response->ssid, currentSsid, sizeof(response->ssid));
-			    response->clockReg = REG(SPI_CLOCK(HSPI));
+				response->vcc = esp_wifi_get_vdd33();
+				SafeStrncpy(response->versionText, firmwareVersion, sizeof(response->versionText));
+				SafeStrncpy(response->hostName, webHostName, sizeof(response->hostName));
+				SafeStrncpy(response->ssid, currentSsid, sizeof(response->ssid));
+				response->clockReg = REG(SPI_CLOCK(HSPI));
 				SendResponse(sizeof(NetworkStatusResponse));
 			}
 			break;
@@ -912,7 +1110,7 @@ void IRAM_ATTR ProcessRequest()
 				{
 					if (lcData.protocol < 3)			// if it's FTP, HTTP or Telnet protocol
 					{
-						RebuildServices();				// update the MDNS services
+						// RebuildServices();				// update the MDNS services
 					}
 					debugPrintf("%sListening on port %u\n", (lcData.maxConnections == 0) ? "Stopped " : "", lcData.port);
 				}
@@ -1024,7 +1222,7 @@ void IRAM_ATTR ProcessRequest()
 				const uint8_t txPower = messageHeaderIn.hdr.flags;
 				if (txPower <= 82)
 				{
-					system_phy_set_max_tpw(txPower);
+					esp_wifi_set_max_tx_power(txPower);
 					SendResponse(ResponseEmpty);
 				}
 				else
@@ -1075,26 +1273,26 @@ void IRAM_ATTR ProcessRequest()
 		case NetworkCommand::networkStop:					// disconnect from an access point, or close down our own access point
 			Connection::TerminateAll();						// terminate all connections
 			Listener::StopListening(0);						// stop listening on all ports
-			RebuildServices();								// remove the MDNS services
+			// RebuildServices();								// remove the MDNS services
 			switch (currentState)
 			{
 			case WiFiState::connected:
 			case WiFiState::connecting:
 			case WiFiState::reconnecting:
-#if LWIP_VERSION_MAJOR == 2
-				RemoveMdnsServices();
-#endif
-#if LWIP_VERSION_MAJOR == 1
-				MDNS.deleteServices();
-#endif
+// #if LWIP_VERSION_MAJOR == 2
+// 				RemoveMdnsServices();
+// #endif
+// #if LWIP_VERSION_MAJOR == 1
+// 				MDNS.deleteServices();
+// #endif
 				delay(20);									// try to give lwip time to recover from stopping everything
-				WiFi.disconnect(true);
+				esp_wifi_disconnect();
 				break;
 
 			case WiFiState::runningAsAccessPoint:
 				dns.stop();
 				delay(20);									// try to give lwip time to recover from stopping everything
-				WiFi.softAPdisconnect(true);
+				esp_wifi_disconnect();
 				break;
 
 			default:
@@ -1131,14 +1329,25 @@ void IRAM_ATTR TransferReadyIsr(void *)
 	transferReadyChanged = true;
 }
 
+
 void setup()
 {
 	gpio_reset_pin(ONBOARD_LED);
 	gpio_set_direction(ONBOARD_LED, GPIO_MODE_OUTPUT);
 	gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 
-// 	WiFi.mode(WIFI_OFF);
-// 	WiFi.persistent(false);
+	tcpip_adapter_init();
+
+	ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+	ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_evt_handler, NULL));
+	ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, ESP_EVENT_ANY_ID, &wifi_evt_handler, NULL));
+
+	wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+	cfg.nvs_enable = false;
+	ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
+	wifiStatus = STATION_IDLE;
 
 	ssids = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, 
 													 ESP_PARTITION_SUBTYPE_DATA_NVS, 
@@ -1146,7 +1355,6 @@ void setup()
 
 	const size_t eepromSizeNeeded = (MaxRememberedNetworks + 1) * sizeof(WirelessConfigurationData);
 	assert(eepromSizeNeeded < ssids->size);
-
 
 	// Set up the SPI subsystem
 	gpio_reset_pin(SamTfrReadyPin);
@@ -1163,7 +1371,7 @@ void setup()
 	// Set up the fast SPI channel
 	hspi.InitMaster(SPI_MODE1, defaultClockControl, true);
 
-//     Connection::Init();
+    Connection::Init();
 //     Listener::Init();
 #if LWIP_VERSION_MAJOR == 2
 //     mdns_resp_init();
@@ -1184,7 +1392,6 @@ void setup()
 	whenLastTransactionFinished = millis();
 	lastStatusReportTime = millis();
 	gpio_set_level(EspReqTransferPin, 1);					// tell the SAM we are ready to receive a command
-	currentState = WiFiState::autoReconnecting;
 }
 
 void loop()
@@ -1212,11 +1419,11 @@ void loop()
 	if (gpio_get_level(SamTfrReadyPin) == 1 && (transferReadyChanged || millis() - whenLastTransactionFinished > TransferReadyTimeout))
 	{
 		transferReadyChanged = false;
-	// 	ProcessRequest();
+		ProcessRequest();
 		whenLastTransactionFinished = millis();
 	}
 
-	// ConnectPoll();
+	ConnectPoll();
 	// Connection::PollOne();
 
 	if (currentState == WiFiState::runningAsAccessPoint)
