@@ -24,6 +24,7 @@ extern "C"
 #include "esp_wifi.h"
 #include "esp_system.h"
 #include "esp_attr.h"
+#include "esp_log.h"
 #include "esp_intr_alloc.h"
 #include "esp_partition.h"
 #include "driver/ledc.h"
@@ -1298,6 +1299,7 @@ void setup()
 	cfg.nvs_enable = false;
 	ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
+	esp_log_level_set("wifi", ESP_LOG_NONE);
 	ssids = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, 
 													 ESP_PARTITION_SUBTYPE_DATA_NVS, 
 													 "ssids");
@@ -1332,7 +1334,7 @@ void setup()
 	ONBOARD_LED = led_indicator_create(ONBOARD_LED_GPIO, &onboard_led_cfg);
 	led_indicator_start(ONBOARD_LED, ONBOARD_LED_IDLE);
 
-	xTaskCreate(ConnectPoll, "connPoll", 1024, NULL, CONN_POLL_PRIO, &connect_poll_taskhdl);
+	xTaskCreate(ConnectPoll, "connPoll", 512, NULL, CONN_POLL_PRIO, &connect_poll_taskhdl);
 
 	tfrReqExpTmr = xTimerCreate("tfrReqTmr", StatusReportMillis, pdFALSE, NULL, 
 			[](void* data) { xTaskNotify(main_taskhdl, TFR_REQUEST_TIMEOUT, eSetBits); });
@@ -1344,7 +1346,7 @@ void setup()
 	gpio_set_level(EspReqTransferPin, 1);					// tell the SAM we are ready to receive a command
 }
 
-void loop()
+void IRAM_ATTR loop()
 {
 	// See whether there is a request from the SAM.
 	// Duet WiFi 1.04 and earlier have hardware to ensure that TransferReady goes low when a transaction starts.

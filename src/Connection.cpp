@@ -21,7 +21,7 @@ Connection::Connection(uint8_t num)
 {
 }
 
-void Connection::GetStatus(ConnStatusResponse& resp) const
+void IRAM_ATTR Connection::GetStatus(ConnStatusResponse& resp) const
 {
 	resp.socketNumber = number;
 	resp.state = state;
@@ -49,7 +49,7 @@ void Connection::Close(bool external)
 }
 
 // Perform housekeeping tasks
-void Connection::Poll()
+void IRAM_ATTR Connection::Poll()
 {
 	if (state == ConnState::connected || state == ConnState::otherEndClosed)
 	{
@@ -99,7 +99,7 @@ void Connection::Poll()
 // A further mitigation would be to restrict the amount of data we accept so some amount that will fit in the MSS, then tcp_write will need to allocate at most one PBUF.
 // However, another reason why tcp_write can fail is because MEMP_NUM_TCP_SEG is set too low in Lwip. It now appears that this is the maoin cause of files tcp_write
 // call in version 1.21. So I have increased it from 10 to 16, which seems to have fixed the problem..
-size_t Connection::Write(const uint8_t *data, size_t length, bool doPush, bool closeAfterSending)
+size_t IRAM_ATTR Connection::Write(const uint8_t *data, size_t length, bool doPush, bool closeAfterSending)
 {
 	if (state != ConnState::connected)
 	{
@@ -141,14 +141,14 @@ size_t Connection::Write(const uint8_t *data, size_t length, bool doPush, bool c
 	return total;
 }
 
-size_t Connection::CanWrite() const
+size_t IRAM_ATTR Connection::CanWrite() const
 {
 	// Return the amount of free space in the write buffer
 	// Note: we cannot necessarily write this amount, because it depends on memory allocations being successful.
 	return ((state == ConnState::connected) && ownPcb->pcb.tcp) ? tcp_sndbuf(ownPcb->pcb.tcp) : 0;
 }
 
-size_t Connection::Read(uint8_t *data, size_t length)
+size_t IRAM_ATTR Connection::Read(uint8_t *data, size_t length)
 {
 	size_t lengthRead = 0;
 	if (pb != nullptr && length != 0 && (state == ConnState::connected || state == ConnState::otherEndClosed))
@@ -181,7 +181,7 @@ size_t Connection::Read(uint8_t *data, size_t length)
 	return lengthRead;
 }
 
-size_t Connection::CanRead() const
+size_t IRAM_ATTR Connection::CanRead() const
 {
 	return ((state == ConnState::connected || state == ConnState::otherEndClosed) && pb != nullptr)
 			? pb->tot_len - readIndex
