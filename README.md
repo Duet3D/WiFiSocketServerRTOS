@@ -32,4 +32,5 @@ user@pc:/path/to/DuetWiFiSocketServer$ idf.py build
 
 ## Links
 
-[Forum](https://forum.duet3d.com/) [Wiki](https://duet3d.dozuki.com/)
+[Forum](https://forum.duet3d.com/)
+[Documentation](https://docs.duet3d.com)
