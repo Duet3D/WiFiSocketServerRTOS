@@ -1322,11 +1322,7 @@ void loop()
 	Connection::PollOne();
 	Connection::PollReadAll();
 
-	if (currentState == WiFiState::runningAsAccessPoint)
-	{
-		dns.processNextRequest();
-	}
-	else if (	(currentState == WiFiState::autoReconnecting ||
+	if (	(currentState == WiFiState::autoReconnecting ||
 				 currentState == WiFiState::connecting ||
 				 currentState == WiFiState::reconnecting) &&
 				(millis() - lastBlinkTime > ONBOARD_LED_BLINK_INTERVAL))

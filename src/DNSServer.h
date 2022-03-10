@@ -44,6 +44,7 @@ class DNSServer
 {
   public:
     DNSServer();
+
     void processNextRequest();
     void setErrorReplyCode(const DNSReplyCode &replyCode);
     void setTTL(const uint32_t &ttl);
@@ -56,6 +57,7 @@ class DNSServer
     void stop();
 
   private:
+
     struct netconn* _udp;
     uint16_t _port;
     std::string _domainName;
@@ -67,6 +69,9 @@ class DNSServer
     DNSReplyCode _errorReplyCode;
     ip_addr_t _remoteIp;
     uint16_t _remotePort;
+
+    TaskHandle_t taskHandle;
+    static void task(void* p);
 
     void downcaseAndRemoveWwwPrefix(std::string &domainName);
     std::string getDomainNameWithoutWwwPrefix();

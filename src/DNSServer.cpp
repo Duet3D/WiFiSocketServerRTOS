@@ -6,6 +6,47 @@
 #include "Config.h"
 #include "DNSServer.h"
 
+typedef enum {
+  SERVER_STOP = 1,
+  SERVER_START = 2
+} dns_state_t;
+
+void DNSServer::task(void* p)
+{
+  DNSServer* server = reinterpret_cast<DNSServer*>(p);
+  uint32_t flags = 0;
+  while(xTaskNotifyWait(0, UINT_MAX, &flags, portMAX_DELAY) == pdTRUE) {
+    if (!(flags & SERVER_STOP)) {
+      if((flags & SERVER_START) && server->_udp == nullptr) {
+          struct netconn* temp = netconn_new(NETCONN_UDP);
+          if (temp)
+          {
+            netconn_set_recvtimeout(temp, 100);
+            err_t rc = netconn_bind(temp, IP4_ADDR_ANY, server->_port);
+            if (rc == ERR_OK) {
+              server->_udp = temp;
+            } else {
+              netconn_close(temp);
+              netconn_delete(temp);
+              server->_udp = nullptr;
+            }
+          }
+      }
+
+      server->processNextRequest();
+      xTaskNotify(server->taskHandle, 0, eNoAction);
+    } else {
+      if (server->_udp) {
+        netconn_close(server->_udp);
+        netconn_delete(server->_udp);
+        server->_udp = nullptr;
+        free(server->_buffer);
+        server->_buffer = NULL;
+      }
+    }
+  }
+}
+
 void replace(std::string &data, std::string to_replace, std::string replacement)
 {
     size_t pos = data.find(to_replace);
@@ -35,20 +76,11 @@ bool DNSServer::start(const uint16_t &port, const std::string &domainName,
   _resolvedIP[3] = resolvedIPAddr[3];
   downcaseAndRemoveWwwPrefix(_domainName);
 
-  struct netconn* temp = netconn_new(NETCONN_UDP);
-
-  if (temp)
-  {
-    netconn_set_nonblocking(temp, 1);
-    err_t rc = netconn_bind(temp, IP4_ADDR_ANY, _port);
-    if (rc == ERR_OK) {
-      _udp = temp;
-      return 1;
-    }
-    netconn_close(temp);
-    netconn_delete(temp);
-    _udp = nullptr;
+  if (!taskHandle) {
+    xTaskCreate(&task, "dnsSrv", 512, this, uxTaskPriorityGet(NULL), &taskHandle);
   }
+
+  xTaskNotify(taskHandle, SERVER_START, eSetValueWithOverwrite);
 
   return 0;
 }
@@ -65,11 +97,7 @@ void DNSServer::setTTL(const uint32_t &ttl)
 
 void DNSServer::stop()
 {
-  netconn_close(_udp);
-  netconn_delete(_udp);
-  _udp = nullptr;
-  free(_buffer);
-  _buffer = NULL;
+  xTaskNotify(taskHandle, SERVER_STOP, eSetValueWithOverwrite);
 }
 
 void DNSServer::downcaseAndRemoveWwwPrefix(std::string &domainName)
