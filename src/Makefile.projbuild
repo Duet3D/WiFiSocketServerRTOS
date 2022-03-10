@@ -1,0 +1,11 @@
+flasher_args_file := $(BUILD_DIR_BASE)/flasher_args
+
+image: app bootloader | check_python_dependencies
+	@echo $(ESPTOOL_ALL_FLASH_ARGS) >  $(flasher_args_file)
+	$(PYTHON) $(COMPONENT_PATH)/create_image.py make $(BUILD_DIR_BASE) $(BUILD_DIR_BASE)/DuetWiFiServer.bin
+
+all: image
+
+clean:
+	rm -f $(flasher_args_file)
+	rm -f $(BUILD_DIR_BASE)/DuetWiFiServer.bin

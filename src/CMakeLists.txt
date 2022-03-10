@@ -22,4 +22,4 @@ idf_build_get_property(build_dir BUILD_DIR)
 
 add_custom_target(image ALL DEPENDS app bootloader ${ssid_init}
      COMMAND ${python} "${CMAKE_CURRENT_LIST_DIR}/create_image.py"
-                    "${esptool_dir}" "${build_dir}" "${build_dir}/DuetWiFiServer.bin")
+                    "cmake" "${build_dir}" "${build_dir}/DuetWiFiServer.bin")

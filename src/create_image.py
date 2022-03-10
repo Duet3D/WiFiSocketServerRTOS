@@ -4,32 +4,64 @@
 import json
 import argparse
 import os
+import subprocess
 
 argparser = argparse.ArgumentParser()
+argparser.add_argument("build_system", type=str)
 argparser.add_argument("build_dir", type=str)
 argparser.add_argument("output", type=str)
 
 args = argparser.parse_args()
 
-flasher_args = json.load(open(os.path.join(args.build_dir, "flasher_args.json"), "r"))
+bins = []
 
-partition_table = flasher_args["partition_table"]
-app = flasher_args["app"]
-bootloader = flasher_args["bootloader"]
+if args.build_system == "cmake":
+    with open(os.path.join(args.build_dir, "flasher_args.json"), "r") as flasher_args:
+        contents = json.load(flasher_args)
+        partition_table = contents["partition_table"]
+        app = contents["app"]
+        bootloader = contents["bootloader"]
+        bins.extend([partition_table, app, bootloader])
 
-bins = [partition_table, app, bootloader]
-bins.sort(key=lambda b: int(b["offset"], base=16))
+    for b in bins:
+        b["offset"] = int(b["offset"], 16)
+    bins.sort(key=lambda b: b["offset"])
+
+else:
+    with open(os.path.join(args.build_dir, "flasher_args")) as flasher_args:
+        contents = flasher_args.read().split()
+        contents_i = iter(contents)
+
+        for c in contents_i:
+            try:
+                bin = dict()
+                bin["offset"] = int(c, 16)
+                c = next(contents_i)
+                bin["file"] = c
+                bins.append(bin)
+            except:
+                pass
 
 with open(args.output, 'wb') as imgfile:
     pos = 0
     img = b''
 
     for b in bins:
-        fill = int(b["offset"], base=16) - pos
+        fill = b["offset"] - pos
         img += b'\xFF' * fill
-        bfile = open(os.path.join(args.build_dir, b["file"]), "rb")
+
+        if args.build_system == "cmake":
+            bfile = open(os.path.join(args.build_dir, b["file"]), "rb")
+        else:
+            if os.name == 'nt':
+                bfilepath = subprocess.check_output(["cygpath", "-m", b["file"]]).strip(b"\n").decode()
+            else:
+                bfilepath = b["file"]
+            bfile = open(bfilepath, "rb")
+
         bcontent = bfile.read()
         img += bcontent
         pos += fill + len(bcontent)
+        bfile.close()
 
     imgfile.write(img)
