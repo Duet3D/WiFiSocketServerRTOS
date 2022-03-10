@@ -178,18 +178,13 @@ void DNSServer::replyWithIP()
   more[4] = 0; //0x0001 answer is class IN (internet address)
   more[5] = 1;
 
-  more[6] = ((uint8_t*)_ttl)[3];
-  more[7] = ((uint8_t*)_ttl)[2];
-  more[8] = ((uint8_t*)_ttl)[1];
-  more[9] = ((uint8_t*)_ttl)[0];
+  memcpy(&more[6], &_ttl, 4);
 
   // Length of RData is 4 bytes (because, in this case, RData is IPv4)
   more[10] = 0;
   more[11] = 4;
-  more[12] = _resolvedIP[3];
-  more[13] = _resolvedIP[2];
-  more[14] = _resolvedIP[1];
-  more[15] = _resolvedIP[0];
+
+  memcpy(&more[12], _resolvedIP, 4);
 
   netconn_sendto(_udp, data, &_remoteIp, _remotePort);
   netbuf_delete(data);
