@@ -26,7 +26,10 @@ extern "C"
 #include "esp_attr.h"
 #include "esp_intr_alloc.h"
 #include "esp_partition.h"
+#include "driver/ledc.h"
 #include "mdns.h"
+
+#include "led_indicator.h"
 
 #include "rom/ets_sys.h"
 #include "driver/gpio.h"
@@ -45,9 +48,13 @@ extern "C"
 #include "esp8266/spi.h"
 #include "esp8266/gpio.h"
 
-const gpio_num_t ONBOARD_LED = GPIO_NUM_2;			// GPIO 2
-const bool ONBOARD_LED_ON = false;					// active low
-const uint32_t ONBOARD_LED_BLINK_INTERVAL = 500;	// ms
+const gpio_num_t ONBOARD_LED_GPIO = GPIO_NUM_2;			// GPIO 2
+led_indicator_handle_t ONBOARD_LED;
+
+constexpr led_indicator_blink_type_t ONBOARD_LED_CONNECTING = BLINK_PROVISIONING;
+constexpr led_indicator_blink_type_t ONBOARD_LED_CONNECTED = BLINK_CONNECTED;
+constexpr led_indicator_blink_type_t ONBOARD_LED_IDLE = BLINK_PROVISIONED;
+
 const uint32_t TransferReadyTimeout = 10;			// how many milliseconds we allow for the Duet to set TransferReady low after the end of a transaction, before we assume that we missed seeing it
 
 const char * const MdnsServiceStrings[3] = { "_http", "_ftp", "_telnet" };
@@ -77,7 +84,6 @@ static char lastConnectError[100];
 static WiFiState currentState = WiFiState::idle,
 				prevCurrentState = WiFiState::disabled,
 				lastReportedState = WiFiState::disabled;
-static uint32_t lastBlinkTime = 0;
 
 static HSPIClass hspi;
 static uint32_t connectStartTime;
@@ -88,6 +94,7 @@ static int ssidIdx = -1;
 static const esp_partition_t* ssids = nullptr;
 static constexpr int wifiRetries = 2;
 static int wifiRetry = 0;
+
 
 typedef enum {
 	STATION_IDLE = 0,
@@ -306,7 +313,6 @@ void ConnectPoll()
 
 			debugPrint("Connected to AP\n");
 			currentState = WiFiState::connected;
-			gpio_set_level(ONBOARD_LED, ONBOARD_LED_ON);
 			break;
 
 		default:
@@ -327,7 +333,6 @@ void ConnectPoll()
 			{
 				esp_wifi_stop();
 				currentState = WiFiState::idle;
-				gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 			}
 		}
 		break;
@@ -353,7 +358,6 @@ void ConnectPoll()
 			case STATION_WRONG_PASSWORD:
 				error = "state 'wrong password'";
 				currentState = WiFiState::idle;
-				gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 				break;
 
 			case STATION_NO_AP_FOUND:
@@ -369,7 +373,6 @@ void ConnectPoll()
 			default:
 				error = "unknown WiFi state";
 				currentState = WiFiState::idle;
-				gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 				break;
 			}
 
@@ -411,6 +414,29 @@ void ConnectPoll()
 		esp_partition_read(ssids, ssidIdx * sizeof(WirelessConfigurationData), &d, sizeof(WirelessConfigurationData));
 		ConnectToAccessPoint(d, true);
 	}
+
+	static led_indicator_blink_type_t cur_blink = ONBOARD_LED_IDLE;
+	led_indicator_blink_type_t new_blink;
+
+	if (currentState == WiFiState::autoReconnecting ||
+		currentState == WiFiState::connecting ||
+		currentState == WiFiState::reconnecting)
+	{
+		new_blink = ONBOARD_LED_CONNECTING;
+	} else if (currentState == WiFiState::connected || 
+			currentState == WiFiState::runningAsAccessPoint) {
+		new_blink = ONBOARD_LED_CONNECTED;
+	} else {
+		new_blink = ONBOARD_LED_IDLE;
+	}
+
+	if (new_blink != cur_blink) {
+		led_indicator_stop(ONBOARD_LED, ONBOARD_LED_IDLE);
+		led_indicator_stop(ONBOARD_LED, ONBOARD_LED_CONNECTING);
+		led_indicator_stop(ONBOARD_LED, ONBOARD_LED_CONNECTED);
+		led_indicator_start(ONBOARD_LED, new_blink);
+		cur_blink = new_blink;
+	}
 }
 
 void StartClient(const char * array ssid)
@@ -435,7 +461,6 @@ pre(currentState == WiFiState::idle)
 		if (res != ESP_OK) {
 			lastError = "network scan failed";
 			currentState = WiFiState::idle;
-			gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 			return;
 		}
 
@@ -616,7 +641,6 @@ void StartAccessPoint()
 
 			SafeStrncpy(currentSsid, apData.ssid, ARRAY_SIZE(currentSsid));
 			currentState = WiFiState::runningAsAccessPoint;
-			gpio_set_level(ONBOARD_LED, ONBOARD_LED_ON);
 			mdns_init();
 			RebuildServices();
 		}
@@ -626,7 +650,6 @@ void StartAccessPoint()
 			lastError = "Failed to start access point";
 			debugPrintf("%s\n", lastError);
 			currentState = WiFiState::idle;
-			gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 		}
 	}
 	else
@@ -634,7 +657,6 @@ void StartAccessPoint()
 		lastError = "invalid access point configuration";
 		debugPrintf("%s\n", lastError);
 		currentState = WiFiState::idle;
-		gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 	}
 }
 
@@ -1204,7 +1226,6 @@ void IRAM_ATTR ProcessRequest()
 			}
 			delay(100);
 			currentState = WiFiState::idle;
-			gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
 			break;
 
 		case NetworkCommand::networkFactoryReset:			// clear remembered list, reset factory defaults
@@ -1236,10 +1257,6 @@ void IRAM_ATTR TransferReadyIsr(void *)
 
 void setup()
 {
-	gpio_reset_pin(ONBOARD_LED);
-	gpio_set_direction(ONBOARD_LED, GPIO_MODE_OUTPUT);
-	gpio_set_level(ONBOARD_LED, !ONBOARD_LED_ON);
-
 	tcpip_adapter_init();
 
 	ESP_ERROR_CHECK(esp_event_loop_create_default());
@@ -1279,6 +1296,13 @@ void setup()
 	Listener::Init();
 	lastError = nullptr;
 	debugPrint("Init completed\n");
+
+	led_indicator_config_t onboard_led_cfg;
+	onboard_led_cfg.off_level = 1;	// active low
+	onboard_led_cfg.mode = LED_GPIO_MODE;
+
+	ONBOARD_LED = led_indicator_create(ONBOARD_LED_GPIO, &onboard_led_cfg);
+	led_indicator_start(ONBOARD_LED, ONBOARD_LED_IDLE);
 
 	gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
 	gpio_isr_handler_add(SamTfrReadyPin, TransferReadyIsr, nullptr);
@@ -1321,15 +1345,6 @@ void loop()
 	Listener::Poll();
 	Connection::PollOne();
 	Connection::PollReadAll();
-
-	if (	(currentState == WiFiState::autoReconnecting ||
-				 currentState == WiFiState::connecting ||
-				 currentState == WiFiState::reconnecting) &&
-				(millis() - lastBlinkTime > ONBOARD_LED_BLINK_INTERVAL))
-	{
-		lastBlinkTime = millis();
-		gpio_set_level(ONBOARD_LED, !gpio_get_level(ONBOARD_LED));
-	}
 }
 
 // End

@@ -10,12 +10,13 @@ set(include_dirs ".")
 
 if(IDF_TARGET STREQUAL "esp8266")
      list(APPEND srcs "esp8266/gpio.c")
-     list(APPEND priv_include_dirs "esp8266")
+     list(APPEND include_dirs "esp8266")
 endif()
 
 idf_component_register(SRCS "${srcs}"
-                       PRIV_INCLUDE_DIRS "${priv_include_dirs}"
-                       REQUIRES spi_flash mdns)
+                       INCLUDE_DIRS "${include_dirs}"
+                       REQUIRES spi_flash mdns
+                       PRIV_REQUIRES indicator)
 
 idf_build_get_property(python PYTHON)
 idf_build_get_property(build_dir BUILD_DIR)
