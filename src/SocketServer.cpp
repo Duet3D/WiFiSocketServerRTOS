@@ -74,7 +74,6 @@ char webHostName[HostNameLength + 1] = "Duet-WiFi";
 DNSServer dns;
 
 static const char* lastError = nullptr;
-static uint32_t whenLastTransactionFinished = 0;
 static bool connectErrorChanged = false;
 static bool transferReadyChanged = false;
 
@@ -85,7 +84,6 @@ static WiFiState currentState = WiFiState::idle,
 
 
 static HSPIClass hspi;
-static uint32_t connectStartTime;
 static uint32_t transferBuffer[NumDwords(MaxDataLength + 1)];
 
 static int ssidIdx = -1;
@@ -94,6 +92,13 @@ static constexpr int wifiRetries = 2;
 static int wifiRetry = 0;
 
 static TaskHandle_t transfer_request_taskhdl;
+
+
+static TimerHandle_t connect_expire_timer;
+static TaskHandle_t connect_poll_taskhdl;
+
+#define CONNECT_EVT 0x01
+#define CONNECT_EXPIRE 0x02
 
 typedef enum {
 	STATION_IDLE = 0,
@@ -202,6 +207,7 @@ static void wifi_evt_handler(void* arg, esp_event_base_t event_base,
 	} else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_AP_START) {
 		ESP_ERROR_CHECK(tcpip_adapter_dhcps_start(TCPIP_ADAPTER_IF_AP));
 	}
+	xTaskNotifyGive(transfer_request_taskhdl);
 }
 
 static void transfer_request_task(void* data)
@@ -224,6 +230,11 @@ static void transfer_request_task(void* data)
 			connectErrorChanged = false;
 		} 
 	}
+}
+
+static void connect_expire_alarm(void* p)
+{
+	xTaskNotify(connect_poll_taskhdl, CONNECT_EXPIRE, eSetBits);
 }
 
 // Rebuild the mDNS services
@@ -282,189 +293,199 @@ pre(currentState == NetworkState::idle)
 	else
 	{
 		currentState = WiFiState::connecting;
-		connectStartTime = millis();
+		xTimerReset(connect_expire_timer, portMAX_DELAY);
 	}
 
 	xTaskNotifyGive(transfer_request_taskhdl);
 }
 
-void ConnectPoll()
+
+void ConnectPoll(void* data)
 {
-	// The Arduino WiFi.status() call is fairly useless here because it discards too much information, so use the SDK API call instead
-	const uint8_t status = wifi_station_get_connect_status();
-	const char *error = nullptr;
-	bool retry = false;
+	connect_expire_timer = xTimerCreate("connTmr", MaxConnectTime, pdFALSE, NULL, connect_expire_alarm);
+	xTimerStart(connect_expire_timer, portMAX_DELAY);
 
-	switch (currentState)
+	while(true)
 	{
-	case WiFiState::connecting:
-	case WiFiState::reconnecting:
-		// We are trying to connect or reconnect, so check for success or failure
-		switch (status)
+		uint32_t flags = 0;
+		xTaskNotifyWait(0, UINT_MAX, &flags, portMAX_DELAY);
+
+		// The Arduino WiFi.status() call is fairly useless here because it discards too much information, so use the SDK API call instead
+		const uint8_t status = wifi_station_get_connect_status();
+		const char *error = nullptr;
+		bool retry = false;
+
+		switch (currentState)
 		{
-		case STATION_IDLE:
-			error = "Unexpected WiFi state 'idle'";
-			break;
-
-		case STATION_CONNECTING:
-			if (millis() - connectStartTime >= MaxConnectTime)
+		case WiFiState::connecting:
+		case WiFiState::reconnecting:
+			// We are trying to connect or reconnect, so check for success or failure
+			switch (status)
 			{
-				error = "Timed out";
+			case STATION_IDLE:
+				error = "Unexpected WiFi state 'idle'";
+				break;
+
+			case STATION_CONNECTING:
+				if (flags & CONNECT_EXPIRE)
+				{
+					error = "Timed out";
+				}
+				break;
+
+			case STATION_WRONG_PASSWORD:
+				error = "Wrong password";
+				break;
+
+			case STATION_NO_AP_FOUND:
+				error = "Didn't find access point";
+				retry = (currentState == WiFiState::reconnecting);
+				break;
+
+			case STATION_CONNECT_FAIL:
+				error = "Failed";
+				retry = (currentState == WiFiState::reconnecting);
+				break;
+
+			case STATION_GOT_IP:
+				if (currentState == WiFiState::reconnecting)
+				{
+					lastError = "Reconnect succeeded";
+				}
+				mdns_init();
+				RebuildServices();
+
+				debugPrint("Connected to AP\n");
+				currentState = WiFiState::connected;
+				xTaskNotifyGive(transfer_request_taskhdl);
+				break;
+
+			default:
+				error = "Unknown WiFi state";
+				break;
+			}
+
+			if (error != nullptr)
+			{
+				strcpy(lastConnectError, error);
+				SafeStrncat(lastConnectError, " while trying to connect to ", ARRAY_SIZE(lastConnectError));
+				SafeStrncat(lastConnectError, currentSsid, ARRAY_SIZE(lastConnectError));
+				lastError = lastConnectError;
+				connectErrorChanged = true;
+				debugPrint("Failed to connect to AP\n");
+
+				if (!retry)
+				{
+					esp_wifi_stop();
+					currentState = WiFiState::idle;
+				}
+
+				xTaskNotifyGive(transfer_request_taskhdl);
 			}
 			break;
 
-		case STATION_WRONG_PASSWORD:
-			error = "Wrong password";
-			break;
-
-		case STATION_NO_AP_FOUND:
-			error = "Didn't find access point";
-			retry = (currentState == WiFiState::reconnecting);
-			break;
-
-		case STATION_CONNECT_FAIL:
-			error = "Failed";
-			retry = (currentState == WiFiState::reconnecting);
-			break;
-
-		case STATION_GOT_IP:
-			if (currentState == WiFiState::reconnecting)
+		case WiFiState::connected:
+			if (status != STATION_GOT_IP)
 			{
-				lastError = "Reconnect succeeded";
-			}
-			mdns_init();
-			RebuildServices();
+				// We have just lost the connection
+				xTimerReset(connect_expire_timer, portMAX_DELAY);						// start the auto reconnect timer
 
-			debugPrint("Connected to AP\n");
-			currentState = WiFiState::connected;
+				switch (status)
+				{
+				case STATION_CONNECTING:							// auto reconnecting
+					error = "auto reconnecting";
+					currentState = WiFiState::autoReconnecting;
+					break;
+
+				case STATION_IDLE:
+					error = "state 'idle'";
+					retry = true;
+					break;
+
+				case STATION_WRONG_PASSWORD:
+					error = "state 'wrong password'";
+					currentState = WiFiState::idle;
+					break;
+
+				case STATION_NO_AP_FOUND:
+					error = "state 'no AP found'";
+					retry = true;
+					break;
+
+				case STATION_CONNECT_FAIL:
+					error = "state 'fail'";
+					retry = true;
+					break;
+
+				default:
+					error = "unknown WiFi state";
+					currentState = WiFiState::idle;
+					break;
+				}
+
+				strcpy(lastConnectError, "Lost connection, ");
+				SafeStrncat(lastConnectError, error, ARRAY_SIZE(lastConnectError));
+				lastError = lastConnectError;
+				connectErrorChanged = true;
+				xTaskNotifyGive(transfer_request_taskhdl);
+				debugPrint("Lost connection to AP\n");
+				break;
+			}
+			break;
+
+		case WiFiState::autoReconnecting:
+			if (status == STATION_GOT_IP)
+			{
+				lastError = "Auto reconnect succeeded";
+				currentState = WiFiState::connected;
+			}
+			else if (status != STATION_CONNECTING && lastError == nullptr)
+			{
+				lastError = "Auto reconnect failed, trying manual reconnect";
+				xTimerReset(connect_expire_timer, portMAX_DELAY);						// start the auto reconnect timer
+				retry = true;
+			}
+			else if (flags & CONNECT_EXPIRE)
+			{
+				lastError = "Timed out trying to auto-reconnect";
+				retry = true;
+			}
 			xTaskNotifyGive(transfer_request_taskhdl);
 			break;
 
 		default:
-			error = "Unknown WiFi state";
 			break;
 		}
 
-		if (error != nullptr)
+		if (retry)
 		{
-			strcpy(lastConnectError, error);
-			SafeStrncat(lastConnectError, " while trying to connect to ", ARRAY_SIZE(lastConnectError));
-			SafeStrncat(lastConnectError, currentSsid, ARRAY_SIZE(lastConnectError));
-			lastError = lastConnectError;
-			connectErrorChanged = true;
-			debugPrint("Failed to connect to AP\n");
-
-			if (!retry)
-			{
-				esp_wifi_stop();
-				currentState = WiFiState::idle;
-			}
-
-			xTaskNotifyGive(transfer_request_taskhdl);
+			WirelessConfigurationData d;
+			esp_partition_read(ssids, ssidIdx * sizeof(WirelessConfigurationData), &d, sizeof(WirelessConfigurationData));
+			ConnectToAccessPoint(d, true);
 		}
-		break;
 
-	case WiFiState::connected:
-		if (status != STATION_GOT_IP)
+		static led_indicator_blink_type_t cur_blink = ONBOARD_LED_IDLE;
+		led_indicator_blink_type_t new_blink;
+
+		if (currentState == WiFiState::autoReconnecting ||
+			currentState == WiFiState::connecting ||
+			currentState == WiFiState::reconnecting)
 		{
-			// We have just lost the connection
-			connectStartTime = millis();						// start the auto reconnect timer
-
-			switch (status)
-			{
-			case STATION_CONNECTING:							// auto reconnecting
-				error = "auto reconnecting";
-				currentState = WiFiState::autoReconnecting;
-				break;
-
-			case STATION_IDLE:
-				error = "state 'idle'";
-				retry = true;
-				break;
-
-			case STATION_WRONG_PASSWORD:
-				error = "state 'wrong password'";
-				currentState = WiFiState::idle;
-				break;
-
-			case STATION_NO_AP_FOUND:
-				error = "state 'no AP found'";
-				retry = true;
-				break;
-
-			case STATION_CONNECT_FAIL:
-				error = "state 'fail'";
-				retry = true;
-				break;
-
-			default:
-				error = "unknown WiFi state";
-				currentState = WiFiState::idle;
-				break;
-			}
-
-			strcpy(lastConnectError, "Lost connection, ");
-			SafeStrncat(lastConnectError, error, ARRAY_SIZE(lastConnectError));
-			lastError = lastConnectError;
-			connectErrorChanged = true;
-			xTaskNotifyGive(transfer_request_taskhdl);
-			debugPrint("Lost connection to AP\n");
-			break;
+			new_blink = ONBOARD_LED_CONNECTING;
+		} else if (currentState == WiFiState::connected || 
+				currentState == WiFiState::runningAsAccessPoint) {
+			new_blink = ONBOARD_LED_CONNECTED;
+		} else {
+			new_blink = ONBOARD_LED_IDLE;
 		}
-		break;
 
-	case WiFiState::autoReconnecting:
-		if (status == STATION_GOT_IP)
-		{
-			lastError = "Auto reconnect succeeded";
-			currentState = WiFiState::connected;
+		if (new_blink != cur_blink) {
+			led_indicator_stop(ONBOARD_LED, ONBOARD_LED_IDLE);
+			led_indicator_stop(ONBOARD_LED, ONBOARD_LED_CONNECTING);
+			led_indicator_stop(ONBOARD_LED, ONBOARD_LED_CONNECTED);
+			led_indicator_start(ONBOARD_LED, new_blink);
+			cur_blink = new_blink;
 		}
-		else if (status != STATION_CONNECTING && lastError == nullptr)
-		{
-			lastError = "Auto reconnect failed, trying manual reconnect";
-			connectStartTime = millis();						// start the manual reconnect timer
-			retry = true;
-		}
-		else if (millis() - connectStartTime >= MaxConnectTime)
-		{
-			lastError = "Timed out trying to auto-reconnect";
-			retry = true;
-		}
-		xTaskNotifyGive(transfer_request_taskhdl);
-		break;
-
-	default:
-		break;
-	}
-
-	if (retry)
-	{
-		WirelessConfigurationData d;
-		esp_partition_read(ssids, ssidIdx * sizeof(WirelessConfigurationData), &d, sizeof(WirelessConfigurationData));
-		ConnectToAccessPoint(d, true);
-	}
-
-	static led_indicator_blink_type_t cur_blink = ONBOARD_LED_IDLE;
-	led_indicator_blink_type_t new_blink;
-
-	if (currentState == WiFiState::autoReconnecting ||
-		currentState == WiFiState::connecting ||
-		currentState == WiFiState::reconnecting)
-	{
-		new_blink = ONBOARD_LED_CONNECTING;
-	} else if (currentState == WiFiState::connected || 
-			currentState == WiFiState::runningAsAccessPoint) {
-		new_blink = ONBOARD_LED_CONNECTED;
-	} else {
-		new_blink = ONBOARD_LED_IDLE;
-	}
-
-	if (new_blink != cur_blink) {
-		led_indicator_stop(ONBOARD_LED, ONBOARD_LED_IDLE);
-		led_indicator_stop(ONBOARD_LED, ONBOARD_LED_CONNECTING);
-		led_indicator_stop(ONBOARD_LED, ONBOARD_LED_CONNECTED);
-		led_indicator_start(ONBOARD_LED, new_blink);
-		cur_blink = new_blink;
 	}
 }
 
@@ -1264,7 +1285,6 @@ void IRAM_ATTR ProcessRequest()
 				break;
 			}
 			delay(100);
-			currentState = WiFiState::idle;
 			break;
 
 		case NetworkCommand::networkFactoryReset:			// clear remembered list, reset factory defaults
@@ -1345,6 +1365,7 @@ void setup()
 	led_indicator_start(ONBOARD_LED, ONBOARD_LED_IDLE);
 
 	xTaskCreate(transfer_request_task, "tfrReq", 512, NULL, uxTaskPriorityGet(NULL), &transfer_request_taskhdl);
+	xTaskCreate(ConnectPoll, "connPoll", 1024, NULL, uxTaskPriorityGet(NULL), &connect_poll_taskhdl);
 
 	gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
 	gpio_isr_handler_add(SamTfrReadyPin, TransferReadyIsr, nullptr);
@@ -1367,7 +1388,6 @@ void loop()
 		whenLastTransactionFinished = millis();
 	}
 
-	ConnectPoll();
 	Listener::Poll();
 	Connection::PollOne();
 	Connection::PollReadAll();
