@@ -75,7 +75,6 @@ DNSServer dns;
 
 static const char* lastError = nullptr;
 static bool connectErrorChanged = false;
-static bool transferReadyChanged = false;
 
 static char lastConnectError[100];
 
@@ -1310,14 +1309,17 @@ void IRAM_ATTR ProcessRequest()
 	}
 }
 
-void IRAM_ATTR TransferReadyIsr(void *)
-{
-	transferReadyChanged = true;
-}
+static TaskHandle_t main_taskhdl;
 
+void IRAM_ATTR TransferReadyIsr(void *data)
+{
+	vTaskNotifyGiveFromISR(main_taskhdl, NULL);
+}
 
 void setup()
 {
+	main_taskhdl = xTaskGetCurrentTaskHandle();
+
 	tcpip_adapter_init();
 
 	ESP_ERROR_CHECK(esp_event_loop_create_default());
@@ -1368,25 +1370,21 @@ void setup()
 	xTaskCreate(transfer_request_task, "tfrReq", 512, NULL, uxTaskPriorityGet(NULL), &transfer_request_taskhdl);
 	xTaskCreate(ConnectPoll, "connPoll", 1024, NULL, uxTaskPriorityGet(NULL), &connect_poll_taskhdl);
 
+
 	gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
 	gpio_isr_handler_add(SamTfrReadyPin, TransferReadyIsr, nullptr);
 	gpio_set_intr_type(SamTfrReadyPin, GPIO_INTR_POSEDGE);
-	whenLastTransactionFinished = millis();
 	gpio_set_level(EspReqTransferPin, 1);					// tell the SAM we are ready to receive a command
 }
 
 void loop()
 {
-	esp_task_wdt_reset();									// kick the watchdog
-
 	// See whether there is a request from the SAM.
 	// Duet WiFi 1.04 and earlier have hardware to ensure that TransferReady goes low when a transaction starts.
 	// Duet 3 Mini doesn't, so we need to see TransferReady go low and then high again. In case that happens so fast that we dn't get the interrupt, we have a timeout.
-	if (gpio_get_level(SamTfrReadyPin) == 1 && (transferReadyChanged || millis() - whenLastTransactionFinished > TransferReadyTimeout))
-	{
-		transferReadyChanged = false;
+	ulTaskNotifyTake(pdTRUE, TransferReadyTimeout);
+	if (gpio_get_level(SamTfrReadyPin) == 1) {
 		ProcessRequest();
-		whenLastTransactionFinished = millis();
 	}
 }
 
