@@ -1130,7 +1130,7 @@ void IRAM_ATTR ProcessRequest()
 			if (ValidSocketNumber(messageHeaderIn.hdr.socketNumber))
 			{
 				messageHeaderIn.hdr.param32 = hspi.transfer32(ResponseEmpty);
-				Connection::Get(messageHeaderIn.hdr.socketNumber).Terminate(true);
+				Connection::Get(messageHeaderIn.hdr.socketNumber).Close(true);
 			}
 			else
 			{
@@ -1142,7 +1142,7 @@ void IRAM_ATTR ProcessRequest()
 			if (ValidSocketNumber(messageHeaderIn.hdr.socketNumber))
 			{
 				messageHeaderIn.hdr.param32 = hspi.transfer32(ResponseEmpty);
-				Connection::Get(messageHeaderIn.hdr.socketNumber).Close();
+				Connection::Get(messageHeaderIn.hdr.socketNumber).Close(true);
 			}
 			else
 			{

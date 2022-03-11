@@ -13,12 +13,11 @@
 #include "Misc.h"				// for millis
 #include "Config.h"
 
-const uint32_t MaxAckTime = 4000;		// how long we wait for a connection to acknowledge the remaining data before it is closed
 
 // Public interface
 Connection::Connection(uint8_t num)
 	: number(num), state(ConnState::free), localPort(0), remotePort(0), remoteIp(0),
-	  closeTimer(0), readIndex(0), alreadyRead(0), ownPcb(nullptr), pb(nullptr)
+	readIndex(0), alreadyRead(0), ownPcb(nullptr), pb(nullptr)
 {
 }
 
@@ -33,43 +32,11 @@ void Connection::GetStatus(ConnStatusResponse& resp) const
 	resp.remoteIp = remoteIp;
 }
 
-// Close the connection gracefully
-void Connection::Close()
-{
-	switch(state)
-	{
-	case ConnState::connected:						// both ends are still connected
-		if (ownPcb->pcb.tcp && tcp_sndbuf(ownPcb->pcb.tcp) < TCP_SND_BUF)
-		{
-			closeTimer = millis();
-			SetState(ConnState::closePending);		// wait for the remaining data to be sent before closing
-			break;
-		}
-		[[fallthrough]];
-	case ConnState::otherEndClosed:					// the other end has already closed the connection
-	case ConnState::closeReady:						// the other end has closed and we were already closePending
-	default:										// should not happen
-		if (ownPcb != nullptr)
-		{
-			netconn_close(ownPcb);
-			netconn_delete(ownPcb);
-			ownPcb = nullptr;
-		}
-		FreePbuf();
-		SetState(ConnState::free);
-		break;
-
-	case ConnState::closePending:					// we already asked to close
-		// Should not happen, but if it does just let the close proceed when sending is complete or timeout
-		break;
-	}
-}
-
-// Terminate the connection.
+// Close the connection.
 // If 'external' is true then the Duet main processor has requested termination, so we free up the connection.
 // Otherwise it has failed because of an internal error, and we set the state to 'aborted'. The Duet main processor will see this and send a termination request,
 // which will free it up.
-void Connection::Terminate(bool external)
+void Connection::Close(bool external)
 {
 	if (ownPcb != nullptr)
 	{
@@ -80,6 +47,8 @@ void Connection::Terminate(bool external)
 	FreePbuf();
 	SetState((external) ? ConnState::free : ConnState::aborted);
 }
+
+
 
 void Connection::PollRead()
 {
@@ -103,7 +72,7 @@ void Connection::PollRead()
 			SetState(ConnState::otherEndClosed);
 		} else
 		{
-			Terminate(false);
+			Close(false);
 		}
 	}
 }
@@ -122,24 +91,7 @@ void Connection::PollReadAll()
 // Perform housekeeping tasks
 void Connection::Poll()
 {
-	if (state == ConnState::connected)
-	{
-	}
-	else if (state == ConnState::closeReady)
-	{
-		// Deferred close, possibly outside the ISR
-		Close();
-	}
-	else if (state == ConnState::closePending)
-	{
-		if (ownPcb->pcb.tcp && tcp_sndbuf(ownPcb->pcb.tcp) < TCP_SND_BUF) {
-			if (millis() - closeTimer >= MaxAckTime) {
-				Terminate(false);
-			}
-		} else {
-			SetState(ConnState::closeReady);
-		}
-	}
+
 }
 
 // Write data to the connection. The amount of data may be zero.
@@ -192,13 +144,12 @@ size_t Connection::Write(const uint8_t *data, size_t length, bool doPush, bool c
 	{
 		// We failed to write the data. See above for possible mitigations. For now we just terminate the connection.
 		debugPrintfAlways("Write fail len=%u err=%d\n", total, (int)rc);
-		Terminate(false);		// chrishamm: Not sure if this helps with LwIP v1.4.3 but it is mandatory for proper error handling with LwIP 2.0.3
+		Close(false);		// chrishamm: Not sure if this helps with LwIP v1.4.3 but it is mandatory for proper error handling with LwIP 2.0.3
 	} else {
 		// Close the connection again when we're done
 		if (closeAfterSending)
 		{
-			closeTimer = millis();
-			SetState(ConnState::closePending);
+			Close(true);
 		}
 	}
 
@@ -284,7 +235,6 @@ int Connection::Accept(struct netconn *pcb)
 	remotePort = pcb->pcb.tcp->remote_port;
 	remoteIp = pcb->pcb.tcp->remote_ip.u_addr.ip4.addr;
 	readIndex = alreadyRead = 0;
-	closeTimer = 0;
 	SetState(ConnState::connected);
 
 	return ERR_OK;
@@ -351,7 +301,7 @@ void Connection::FreePbuf()
 {
 	for (size_t i = 0; i < MaxConnections; ++i)
 	{
-		Connection::Get(i).Terminate(true);
+		Connection::Get(i).Close(true);
 	}
 }
 
