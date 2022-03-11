@@ -1193,6 +1193,7 @@ void IRAM_ATTR ProcessRequest()
 				messageHeaderIn.hdr.param32 = hspi.transfer32(sizeof(ConnStatusResponse));
 				Connection& conn = Connection::Get(messageHeaderIn.hdr.socketNumber);
 				ConnStatusResponse resp;
+				conn.Poll();
 				conn.GetStatus(resp);
 				Connection::GetSummarySocketStatus(resp.connectedSockets, resp.otherEndClosedSockets);
 				hspi.transferDwords(reinterpret_cast<const uint32_t *>(&resp), nullptr, NumDwords(sizeof(resp)));
@@ -1389,8 +1390,6 @@ void loop()
 	}
 
 	Listener::Poll();
-	Connection::PollOne();
-	Connection::PollReadAll();
 }
 
 // End

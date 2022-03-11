@@ -48,50 +48,35 @@ void Connection::Close(bool external)
 	SetState((external) ? ConnState::free : ConnState::aborted);
 }
 
-
-
-void Connection::PollRead()
-{
-	struct pbuf *data = nullptr;
-	err_t rc = netconn_recv_tcp_pbuf_flags(ownPcb, &data, NETCONN_NOAUTORCVD);
-
-	while(rc == ERR_OK) {
-		if (pb == nullptr) {
-			pb = data;
-			readIndex = alreadyRead = 0;
-		} else {
-			pbuf_cat(pb, data);
-		}
-		data = nullptr;
-		rc = netconn_recv_tcp_pbuf_flags(ownPcb, &data, NETCONN_NOAUTORCVD);
-	}
-
-	if (rc != ERR_WOULDBLOCK) {
-		if (rc == ERR_RST)
-		{
-			SetState(ConnState::otherEndClosed);
-		} else
-		{
-			Close(false);
-		}
-	}
-}
-
-void Connection::PollReadAll()
-{
-	for (size_t i = 0; i < MaxConnections; ++i)
-	{
-		if (connectionList[i]->state == ConnState::connected || connectionList[i]->state == ConnState::otherEndClosed)
-		{
-			connectionList[i]->PollRead();
-		}
-	}
-}
-
 // Perform housekeeping tasks
 void Connection::Poll()
 {
+	if (state == ConnState::connected || state == ConnState::otherEndClosed)
+	{
+		struct pbuf *data = nullptr;
+		err_t rc = netconn_recv_tcp_pbuf_flags(ownPcb, &data, NETCONN_NOAUTORCVD);
 
+		while(rc == ERR_OK) {
+			if (pb == nullptr) {
+				pb = data;
+				readIndex = alreadyRead = 0;
+			} else {
+				pbuf_cat(pb, data);
+			}
+			data = nullptr;
+			rc = netconn_recv_tcp_pbuf_flags(ownPcb, &data, NETCONN_NOAUTORCVD);
+		}
+
+		if (rc != ERR_WOULDBLOCK) {
+			if (rc == ERR_RST)
+			{
+				SetState(ConnState::otherEndClosed);
+			} else
+			{
+				Close(false);
+			}
+		}
+	}
 }
 
 // Write data to the connection. The amount of data may be zero.
