@@ -1388,8 +1388,6 @@ void loop()
 		ProcessRequest();
 		whenLastTransactionFinished = millis();
 	}
-
-	Listener::Poll();
 }
 
 // End

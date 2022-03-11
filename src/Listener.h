@@ -19,7 +19,7 @@ public:
 	Listener();
 	void Accept();
 
-	static void Init() { }
+	static void Init();
 	static void Poll();
 	static bool Listen(uint32_t ip, uint16_t port, uint8_t protocol, uint16_t maxConns);
 	static void StopListening(uint16_t port);
@@ -38,6 +38,12 @@ private:
 	uint16_t port;
 	uint16_t maxConnections;
 	uint8_t protocol;
+
+	static SemaphoreHandle_t listMutex;
+	static TaskHandle_t taskHdl;
+	static void task(void* data);
+
+	static void netconn_cb(struct netconn *conn, enum netconn_evt evt, u16_t len);
 
 	static Listener *activeList;
 	static Listener *freeList;
