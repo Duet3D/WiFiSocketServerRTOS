@@ -74,7 +74,6 @@ char webHostName[HostNameLength + 1] = "Duet-WiFi";
 DNSServer dns;
 
 static const char* lastError = nullptr;
-static const char* prevLastError = nullptr;
 static uint32_t whenLastTransactionFinished = 0;
 static bool connectErrorChanged = false;
 static bool transferReadyChanged = false;
@@ -82,12 +81,11 @@ static bool transferReadyChanged = false;
 static char lastConnectError[100];
 
 static WiFiState currentState = WiFiState::idle,
-				prevCurrentState = WiFiState::disabled,
 				lastReportedState = WiFiState::disabled;
+
 
 static HSPIClass hspi;
 static uint32_t connectStartTime;
-static uint32_t lastStatusReportTime;
 static uint32_t transferBuffer[NumDwords(MaxDataLength + 1)];
 
 static int ssidIdx = -1;
@@ -95,6 +93,7 @@ static const esp_partition_t* ssids = nullptr;
 static constexpr int wifiRetries = 2;
 static int wifiRetry = 0;
 
+static TaskHandle_t transfer_request_taskhdl;
 
 typedef enum {
 	STATION_IDLE = 0,
@@ -152,6 +151,7 @@ bool ValidSocketNumber(uint8_t num)
 		return true;
 	}
 	lastError = "socket number out of range";
+	xTaskNotifyGive(transfer_request_taskhdl);
 	return false;
 }
 
@@ -201,6 +201,28 @@ static void wifi_evt_handler(void* arg, esp_event_base_t event_base,
 		wifiStatus = STATION_GOT_IP;
 	} else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_AP_START) {
 		ESP_ERROR_CHECK(tcpip_adapter_dhcps_start(TCPIP_ADAPTER_IF_AP));
+	}
+}
+
+static void transfer_request_task(void* data)
+{
+	const char* prevLastError = nullptr;
+	WiFiState prevCurrentState = WiFiState::disabled;
+
+	while(true) {
+		ulTaskNotifyTake(pdTRUE, StatusReportMillis);
+
+		if ((lastError != prevLastError || connectErrorChanged || currentState != prevCurrentState)
+			|| (lastError != nullptr || currentState != lastReportedState))
+		{
+			ets_delay_us(2);									// make sure the pin stays high for long enough for the SAM to see it
+			gpio_set_level(EspReqTransferPin, 0);			// force a low to high transition to signal that an error message is available
+			ets_delay_us(2);									// make sure it is low enough to create an interrupt when it goes high
+			gpio_set_level(EspReqTransferPin, 1);			// tell the SAM we are ready to receive a command
+			prevLastError = lastError;
+			prevCurrentState = currentState;
+			connectErrorChanged = false;
+		} 
 	}
 }
 
@@ -262,6 +284,8 @@ pre(currentState == NetworkState::idle)
 		currentState = WiFiState::connecting;
 		connectStartTime = millis();
 	}
+
+	xTaskNotifyGive(transfer_request_taskhdl);
 }
 
 void ConnectPoll()
@@ -313,6 +337,7 @@ void ConnectPoll()
 
 			debugPrint("Connected to AP\n");
 			currentState = WiFiState::connected;
+			xTaskNotifyGive(transfer_request_taskhdl);
 			break;
 
 		default:
@@ -334,6 +359,8 @@ void ConnectPoll()
 				esp_wifi_stop();
 				currentState = WiFiState::idle;
 			}
+
+			xTaskNotifyGive(transfer_request_taskhdl);
 		}
 		break;
 
@@ -380,6 +407,7 @@ void ConnectPoll()
 			SafeStrncat(lastConnectError, error, ARRAY_SIZE(lastConnectError));
 			lastError = lastConnectError;
 			connectErrorChanged = true;
+			xTaskNotifyGive(transfer_request_taskhdl);
 			debugPrint("Lost connection to AP\n");
 			break;
 		}
@@ -402,6 +430,7 @@ void ConnectPoll()
 			lastError = "Timed out trying to auto-reconnect";
 			retry = true;
 		}
+		xTaskNotifyGive(transfer_request_taskhdl);
 		break;
 
 	default:
@@ -461,6 +490,7 @@ pre(currentState == WiFiState::idle)
 		if (res != ESP_OK) {
 			lastError = "network scan failed";
 			currentState = WiFiState::idle;
+			xTaskNotifyGive(transfer_request_taskhdl);
 			return;
 		}
 
@@ -498,6 +528,7 @@ pre(currentState == WiFiState::idle)
 		if (strongestNetwork < 0)
 		{
 			lastError = "no known networks found";
+			xTaskNotifyGive(transfer_request_taskhdl);
 			return;
 		}
 
@@ -509,6 +540,7 @@ pre(currentState == WiFiState::idle)
 		if (ssidIdx < 0)
 		{
 			lastError = "no data found for requested SSID";
+			xTaskNotifyGive(transfer_request_taskhdl);
 			return;
 		}
 	}
@@ -643,6 +675,7 @@ void StartAccessPoint()
 			currentState = WiFiState::runningAsAccessPoint;
 			mdns_init();
 			RebuildServices();
+			xTaskNotifyGive(transfer_request_taskhdl);
 		}
 		else
 		{
@@ -650,6 +683,7 @@ void StartAccessPoint()
 			lastError = "Failed to start access point";
 			debugPrintf("%s\n", lastError);
 			currentState = WiFiState::idle;
+			xTaskNotifyGive(transfer_request_taskhdl);
 		}
 	}
 	else
@@ -657,6 +691,7 @@ void StartAccessPoint()
 		lastError = "invalid access point configuration";
 		debugPrintf("%s\n", lastError);
 		currentState = WiFiState::idle;
+		xTaskNotifyGive(transfer_request_taskhdl);
 	}
 }
 
@@ -896,6 +931,7 @@ void IRAM_ATTR ProcessRequest()
 				else
 				{
 					lastError = "SSID table full";
+					xTaskNotifyGive(transfer_request_taskhdl);
 				}
 			}
 			else
@@ -923,6 +959,7 @@ void IRAM_ATTR ProcessRequest()
 				else
 				{
 					lastError = "SSID not found";
+					xTaskNotifyGive(transfer_request_taskhdl);
 				}
 			}
 			else
@@ -1048,6 +1085,7 @@ void IRAM_ATTR ProcessRequest()
 				else
 				{
 					lastError = "Listen failed";
+					xTaskNotifyGive(transfer_request_taskhdl);
 					debugPrint("Listen failed\n");
 				}
 			}
@@ -1119,6 +1157,7 @@ void IRAM_ATTR ProcessRequest()
 				if (written != acceptedLength)
 				{
 					lastError = "incomplete write";
+					xTaskNotifyGive(transfer_request_taskhdl);
 				}
 			}
 			else
@@ -1244,6 +1283,7 @@ void IRAM_ATTR ProcessRequest()
 
 		default:
 			lastError = "bad deferred command";
+			xTaskNotifyGive(transfer_request_taskhdl);
 			break;
 		}
 	}
@@ -1304,32 +1344,18 @@ void setup()
 	ONBOARD_LED = led_indicator_create(ONBOARD_LED_GPIO, &onboard_led_cfg);
 	led_indicator_start(ONBOARD_LED, ONBOARD_LED_IDLE);
 
+	xTaskCreate(transfer_request_task, "tfrReq", 512, NULL, uxTaskPriorityGet(NULL), &transfer_request_taskhdl);
+
 	gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
 	gpio_isr_handler_add(SamTfrReadyPin, TransferReadyIsr, nullptr);
 	gpio_set_intr_type(SamTfrReadyPin, GPIO_INTR_POSEDGE);
 	whenLastTransactionFinished = millis();
-	lastStatusReportTime = millis();
 	gpio_set_level(EspReqTransferPin, 1);					// tell the SAM we are ready to receive a command
 }
 
 void loop()
 {
-	gpio_set_level(EspReqTransferPin, 1);					// tell the SAM we are ready to receive a command
 	esp_task_wdt_reset();									// kick the watchdog
-
-	if (	(lastError != prevLastError || connectErrorChanged || currentState != prevCurrentState)
-		|| ((lastError != nullptr || currentState != lastReportedState) && millis() - lastStatusReportTime > StatusReportMillis)
-		)
-	{
-	 	ets_delay_us(2);									// make sure the pin stays high for long enough for the SAM to see it
-		gpio_set_level(EspReqTransferPin, 0);			// force a low to high transition to signal that an error message is available
-		ets_delay_us(2);									// make sure it is low enough to create an interrupt when it goes high
-		gpio_set_level(EspReqTransferPin, 1);			// tell the SAM we are ready to receive a command
-		prevLastError = lastError;
-		prevCurrentState = currentState;
-		connectErrorChanged = false;
-		lastStatusReportTime = millis();
-	}
 
 	// See whether there is a request from the SAM.
 	// Duet WiFi 1.04 and earlier have hardware to ensure that TransferReady goes low when a transaction starts.
