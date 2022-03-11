@@ -82,7 +82,7 @@ bool DNSServer::start(const uint16_t &port, const std::string &domainName,
 
   xTaskNotify(taskHandle, SERVER_START, eSetValueWithOverwrite);
 
-  return 0;
+  return true;
 }
 
 void DNSServer::setErrorReplyCode(const DNSReplyCode &replyCode)
