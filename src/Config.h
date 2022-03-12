@@ -59,4 +59,10 @@ const uint8_t Backlog = 8;
 #define debugPrintAlways(_str)			ets_printf("%s(%d): %s", __FILE__, __LINE__, _str)
 #define debugPrintfAlways(_format, ...)	ets_printf("%s(%d): ", __FILE__, __LINE__); ets_printf(_format, __VA_ARGS__)
 
+#define MAIN_TASK_PRIO      (ESP_TASK_TCPIP_PRIO + 1)
+#define TFR_REQ_PRIO        (MAIN_TASK_PRIO + 2)
+#define CONN_POLL_PRIO      (MAIN_TASK_PRIO + 1)
+#define LISTEN_PRIO         (MAIN_TASK_PRIO)
+#define DNS_SERVER_PRIO     (MAIN_TASK_PRIO - 5)
+
 #endif

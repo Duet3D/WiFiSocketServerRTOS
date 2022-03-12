@@ -1367,9 +1367,8 @@ void setup()
 	ONBOARD_LED = led_indicator_create(ONBOARD_LED_GPIO, &onboard_led_cfg);
 	led_indicator_start(ONBOARD_LED, ONBOARD_LED_IDLE);
 
-	xTaskCreate(transfer_request_task, "tfrReq", 512, NULL, uxTaskPriorityGet(NULL), &transfer_request_taskhdl);
-	xTaskCreate(ConnectPoll, "connPoll", 1024, NULL, uxTaskPriorityGet(NULL), &connect_poll_taskhdl);
-
+	xTaskCreate(transfer_request_task, "tfrReq", 512, NULL, TFR_REQ_PRIO, &transfer_request_taskhdl);
+	xTaskCreate(ConnectPoll, "connPoll", 1024, NULL, CONN_POLL_PRIO, &connect_poll_taskhdl);
 
 	gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
 	gpio_isr_handler_add(SamTfrReadyPin, TransferReadyIsr, nullptr);

@@ -40,7 +40,7 @@ void Listener::task(void* p)
 void Listener::Init()
 {
 	listMutex = xSemaphoreCreateRecursiveMutex();
-	xTaskCreate(task, "lstn", 512, NULL, uxTaskPriorityGet(NULL), &taskHdl);
+	xTaskCreate(task, "lstn", 512, NULL, LISTEN_PRIO, &taskHdl);
 }
 
 void Listener::Accept()
