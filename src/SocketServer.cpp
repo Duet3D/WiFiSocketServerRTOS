@@ -74,39 +74,31 @@ char webHostName[HostNameLength + 1] = "Duet-WiFi";
 DNSServer dns;
 
 static const char* lastError = nullptr;
-static bool connectErrorChanged = false;
-
-static char lastConnectError[100];
-
+static const char* prevLastError = nullptr;
 static WiFiState currentState = WiFiState::idle,
 				lastReportedState = WiFiState::disabled;
-
 
 static HSPIClass hspi;
 static uint32_t transferBuffer[NumDwords(MaxDataLength + 1)];
 
 static int ssidIdx = -1;
 static const esp_partition_t* ssids = nullptr;
-static constexpr int wifiRetries = 2;
-static int wifiRetry = 0;
 
-static TaskHandle_t transfer_request_taskhdl;
-
-
-static TimerHandle_t connect_expire_timer;
-static TaskHandle_t connect_poll_taskhdl;
+static TaskHandle_t main_taskhdl;
 
 #define CONNECT_EVT 0x01
 #define CONNECT_EXPIRE 0x02
 
 typedef enum {
-	STATION_IDLE = 0,
+	WIFI_IDLE = 0,
 	STATION_CONNECTING,
 	STATION_WRONG_PASSWORD,
 	STATION_NO_AP_FOUND,
+	STATION_CONNECT_TIMEOUT,
 	STATION_CONNECT_FAIL,
-	STATION_GOT_IP
-} station_status_t;
+	STATION_GOT_IP,
+	AP_STARTED,
+} wifi_status_t;
 
 typedef enum {
 	PHY_MODE_11B	= 1,
@@ -114,8 +106,11 @@ typedef enum {
 	PHY_MODE_11N	= 3
 } phy_mode_t;
 
-static station_status_t wifiStatus;
-static station_status_t wifi_station_get_connect_status(void) { return wifiStatus; };
+#define TFR_REQUEST           0x01
+#define TFR_REQUEST_TIMEOUT   0x02
+#define SAM_TFR_READY         0x04
+
+static TaskHandle_t connect_poll_taskhdl;
 
 // Look up a SSID in our remembered network list, return pointer to it if found
 int RetrieveSsidData(const char *ssid, WirelessConfigurationData& data)
@@ -155,7 +150,6 @@ bool ValidSocketNumber(uint8_t num)
 		return true;
 	}
 	lastError = "socket number out of range";
-	xTaskNotifyGive(transfer_request_taskhdl);
 	return false;
 }
 
@@ -168,72 +162,35 @@ void FactoryReset()
 static void wifi_evt_handler(void* arg, esp_event_base_t event_base,
 								int32_t event_id, void* event_data)
 {
+	wifi_status_t wifiEvt = WIFI_IDLE;
+
 	if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-			esp_wifi_set_protocol(ESP_IF_WIFI_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
-#if NO_WIFI_SLEEP
-			ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
-#else
-			ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));
-#endif
+		wifiEvt = STATION_CONNECTING;
 	} else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
 		wifi_event_sta_disconnected_t* disconnected = (wifi_event_sta_disconnected_t*) event_data;
-		if (disconnected->reason != WIFI_REASON_ASSOC_LEAVE && wifiRetry < wifiRetries) {
-			wifiStatus = STATION_CONNECTING;
-			wifiRetry++;
-			esp_wifi_connect();
-		} else {
-			wifiRetry = 0;
-			switch (disconnected->reason) {
-				case WIFI_REASON_AUTH_FAIL:
-					wifiStatus = STATION_WRONG_PASSWORD;
-					break;
-				case WIFI_REASON_NO_AP_FOUND:
-					wifiStatus = STATION_NO_AP_FOUND;
-					break;
-				case WIFI_REASON_ASSOC_LEAVE:
-					wifiStatus = STATION_IDLE;
-					break;
-				default:
-					wifiStatus = STATION_CONNECT_FAIL;
-					break;
-			}
+		switch (disconnected->reason) {
+			case WIFI_REASON_AUTH_FAIL:
+				wifiEvt = STATION_WRONG_PASSWORD;
+				break;
+			case WIFI_REASON_NO_AP_FOUND:
+				wifiEvt = STATION_NO_AP_FOUND;
+				break;
+			case WIFI_REASON_ASSOC_LEAVE:
+				wifiEvt = WIFI_IDLE;
+				break;
+			default:
+				wifiEvt = STATION_CONNECT_FAIL;
+				break;
 		}
-	} else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
-		wifiRetry = 0;
-		ESP_ERROR_CHECK(tcpip_adapter_set_hostname(TCPIP_ADAPTER_IF_STA, webHostName));
+	} else if (event_base == WIFI_EVENT && (event_id == WIFI_EVENT_STA_STOP || event_id == WIFI_EVENT_AP_STOP)) {
+		wifiEvt = WIFI_IDLE; 
 	} else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
-		wifiStatus = STATION_GOT_IP;
+		wifiEvt = STATION_GOT_IP;
 	} else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_AP_START) {
-		ESP_ERROR_CHECK(tcpip_adapter_dhcps_start(TCPIP_ADAPTER_IF_AP));
+		wifiEvt = AP_STARTED;
 	}
-	xTaskNotifyGive(transfer_request_taskhdl);
-}
 
-static void transfer_request_task(void* data)
-{
-	const char* prevLastError = nullptr;
-	WiFiState prevCurrentState = WiFiState::disabled;
-
-	while(true) {
-		ulTaskNotifyTake(pdTRUE, StatusReportMillis);
-
-		if ((lastError != prevLastError || connectErrorChanged || currentState != prevCurrentState)
-			|| (lastError != nullptr || currentState != lastReportedState))
-		{
-			ets_delay_us(2);									// make sure the pin stays high for long enough for the SAM to see it
-			gpio_set_level(EspReqTransferPin, 0);			// force a low to high transition to signal that an error message is available
-			ets_delay_us(2);									// make sure it is low enough to create an interrupt when it goes high
-			gpio_set_level(EspReqTransferPin, 1);			// tell the SAM we are ready to receive a command
-			prevLastError = lastError;
-			prevCurrentState = currentState;
-			connectErrorChanged = false;
-		} 
-	}
-}
-
-static void connect_expire_alarm(void* p)
-{
-	xTaskNotify(connect_poll_taskhdl, CONNECT_EXPIRE, eSetBits);
+	xTaskNotify(connect_poll_taskhdl, wifiEvt, eSetValueWithOverwrite);
 }
 
 // Rebuild the mDNS services
@@ -260,7 +217,7 @@ void RemoveMdnsServices()
 }
 
 // Try to connect using the specified SSID and password
-void ConnectToAccessPoint(const WirelessConfigurationData& apData, bool isRetry)
+void ConnectToAccessPoint(const WirelessConfigurationData& apData)
 pre(currentState == NetworkState::idle)
 {
 	SafeStrncpy(currentSsid, apData.ssid, ARRAY_SIZE(currentSsid));
@@ -281,36 +238,30 @@ pre(currentState == NetworkState::idle)
 		ESP_ERROR_CHECK(tcpip_adapter_set_ip_info(TCPIP_ADAPTER_IF_STA, &ip_info));
 	}
 
+	ESP_ERROR_CHECK(tcpip_adapter_set_hostname(TCPIP_ADAPTER_IF_STA, webHostName));
+
 	debugPrintf("Trying to connect to ssid \"%s\" with password \"%s\"\n", apData.ssid, apData.password);
-	wifiStatus = STATION_CONNECTING;
 	esp_wifi_connect();
-
-	if (isRetry)
-	{
-		currentState = WiFiState::reconnecting;
-	}
-	else
-	{
-		currentState = WiFiState::connecting;
-		xTimerReset(connect_expire_timer, portMAX_DELAY);
-	}
-
-	xTaskNotifyGive(transfer_request_taskhdl);
 }
 
 
 void ConnectPoll(void* data)
 {
-	connect_expire_timer = xTimerCreate("connTmr", MaxConnectTime, pdFALSE, NULL, connect_expire_alarm);
-	xTimerStart(connect_expire_timer, portMAX_DELAY);
+	TimerHandle_t connect_expire_timer = xTimerCreate("connTmr", MaxConnectTime, pdFALSE, NULL, 
+			[](void* data) { xTaskNotify(connect_poll_taskhdl, STATION_CONNECT_TIMEOUT, eSetBits); });
+
+	static char lastConnectError[100];
 
 	while(true)
 	{
 		uint32_t flags = 0;
 		xTaskNotifyWait(0, UINT_MAX, &flags, portMAX_DELAY);
 
+		WiFiState prevCurrentState = currentState;
+		bool connectErrorChanged = false;
+
 		// The Arduino WiFi.status() call is fairly useless here because it discards too much information, so use the SDK API call instead
-		const uint8_t status = wifi_station_get_connect_status();
+		const wifi_status_t status = static_cast<wifi_status_t>(flags);
 		const char *error = nullptr;
 		bool retry = false;
 
@@ -321,15 +272,12 @@ void ConnectPoll(void* data)
 			// We are trying to connect or reconnect, so check for success or failure
 			switch (status)
 			{
-			case STATION_IDLE:
-				error = "Unexpected WiFi state 'idle'";
+			case WIFI_IDLE:
+				currentState = WiFiState::idle;	// cancelled connection/reconnection
 				break;
 
-			case STATION_CONNECTING:
-				if (flags & CONNECT_EXPIRE)
-				{
-					error = "Timed out";
-				}
+			case STATION_CONNECT_TIMEOUT:
+				error = "Timed out";
 				break;
 
 			case STATION_WRONG_PASSWORD:
@@ -351,12 +299,9 @@ void ConnectPoll(void* data)
 				{
 					lastError = "Reconnect succeeded";
 				}
-				mdns_init();
-				RebuildServices();
 
 				debugPrint("Connected to AP\n");
 				currentState = WiFiState::connected;
-				xTaskNotifyGive(transfer_request_taskhdl);
 				break;
 
 			default:
@@ -376,19 +321,13 @@ void ConnectPoll(void* data)
 				if (!retry)
 				{
 					esp_wifi_stop();
-					currentState = WiFiState::idle;
 				}
-
-				xTaskNotifyGive(transfer_request_taskhdl);
 			}
 			break;
 
 		case WiFiState::connected:
 			if (status != STATION_GOT_IP)
 			{
-				// We have just lost the connection
-				xTimerReset(connect_expire_timer, portMAX_DELAY);						// start the auto reconnect timer
-
 				switch (status)
 				{
 				case STATION_CONNECTING:							// auto reconnecting
@@ -396,9 +335,8 @@ void ConnectPoll(void* data)
 					currentState = WiFiState::autoReconnecting;
 					break;
 
-				case STATION_IDLE:
-					error = "state 'idle'";
-					retry = true;
+				case WIFI_IDLE:
+					currentState = WiFiState::idle;					// disconnected/stopped Wi-Fi
 					break;
 
 				case STATION_WRONG_PASSWORD:
@@ -418,16 +356,17 @@ void ConnectPoll(void* data)
 
 				default:
 					error = "unknown WiFi state";
-					currentState = WiFiState::idle;
 					break;
 				}
 
-				strcpy(lastConnectError, "Lost connection, ");
-				SafeStrncat(lastConnectError, error, ARRAY_SIZE(lastConnectError));
-				lastError = lastConnectError;
-				connectErrorChanged = true;
-				xTaskNotifyGive(transfer_request_taskhdl);
-				debugPrint("Lost connection to AP\n");
+				if (error != nullptr)
+				{
+					strcpy(lastConnectError, "Lost connection, ");
+					SafeStrncat(lastConnectError, error, ARRAY_SIZE(lastConnectError));
+					lastError = lastConnectError;
+					connectErrorChanged = true;
+					debugPrint("Lost connection to AP\n");
+				}
 				break;
 			}
 			break;
@@ -449,9 +388,22 @@ void ConnectPoll(void* data)
 				lastError = "Timed out trying to auto-reconnect";
 				retry = true;
 			}
-			xTaskNotifyGive(transfer_request_taskhdl);
+			break;
+		
+		case WiFiState::idle:
+			if (status == AP_STARTED) {
+				currentState = WiFiState::runningAsAccessPoint;
+			} else if (status == STATION_CONNECTING) {
+				currentState = WiFiState::connecting;
+			}
 			break;
 
+		case WiFiState::runningAsAccessPoint:
+			if (status == WIFI_IDLE) {
+				currentState = WiFiState::idle;
+			}
+
+			break;
 		default:
 			break;
 		}
@@ -460,30 +412,35 @@ void ConnectPoll(void* data)
 		{
 			WirelessConfigurationData d;
 			esp_partition_read(ssids, ssidIdx * sizeof(WirelessConfigurationData), &d, sizeof(WirelessConfigurationData));
-			ConnectToAccessPoint(d, true);
+			ConnectToAccessPoint(d);
+			currentState = WiFiState::reconnecting;
 		}
 
-		static led_indicator_blink_type_t cur_blink = ONBOARD_LED_IDLE;
-		led_indicator_blink_type_t new_blink;
+		if (currentState != prevCurrentState) {
+			led_indicator_blink_type_t new_blink;
 
-		if (currentState == WiFiState::autoReconnecting ||
-			currentState == WiFiState::connecting ||
-			currentState == WiFiState::reconnecting)
-		{
-			new_blink = ONBOARD_LED_CONNECTING;
-		} else if (currentState == WiFiState::connected || 
-				currentState == WiFiState::runningAsAccessPoint) {
-			new_blink = ONBOARD_LED_CONNECTED;
-		} else {
-			new_blink = ONBOARD_LED_IDLE;
-		}
+			if (currentState == WiFiState::autoReconnecting ||
+				currentState == WiFiState::connecting ||
+				currentState == WiFiState::reconnecting)
+			{
+				new_blink = ONBOARD_LED_CONNECTING;
+			} else if (currentState == WiFiState::connected || 
+					currentState == WiFiState::runningAsAccessPoint) {
+				new_blink = ONBOARD_LED_CONNECTED;
+			} else {
+				new_blink = ONBOARD_LED_IDLE;
+			}
 
-		if (new_blink != cur_blink) {
 			led_indicator_stop(ONBOARD_LED, ONBOARD_LED_IDLE);
 			led_indicator_stop(ONBOARD_LED, ONBOARD_LED_CONNECTING);
 			led_indicator_stop(ONBOARD_LED, ONBOARD_LED_CONNECTED);
 			led_indicator_start(ONBOARD_LED, new_blink);
-			cur_blink = new_blink;
+		}
+
+		if (lastError != prevLastError || currentState != prevCurrentState || 
+			connectErrorChanged)
+		{
+			xTaskNotify(main_taskhdl, TFR_REQUEST, eSetBits);
 		}
 	}
 }
@@ -491,12 +448,22 @@ void ConnectPoll(void* data)
 void StartClient(const char * array ssid)
 pre(currentState == WiFiState::idle)
 {
+	esp_wifi_stop();
+
+	mdns_init();
+
 	WirelessConfigurationData wp;
 
 	esp_wifi_restore();
+	esp_wifi_set_mode(WIFI_MODE_STA);
+	esp_wifi_set_protocol(ESP_IF_WIFI_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
+#if NO_WIFI_SLEEP
+	esp_wifi_set_ps(WIFI_PS_NONE);
+#else
+	esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+#endif
 
-	ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-	ESP_ERROR_CHECK(esp_wifi_start());
+	esp_wifi_start();
 
 	if (ssid == nullptr || ssid[0] == 0)
 	{
@@ -509,8 +476,7 @@ pre(currentState == WiFiState::idle)
 
 		if (res != ESP_OK) {
 			lastError = "network scan failed";
-			currentState = WiFiState::idle;
-			xTaskNotifyGive(transfer_request_taskhdl);
+			esp_wifi_stop();
 			return;
 		}
 
@@ -548,7 +514,6 @@ pre(currentState == WiFiState::idle)
 		if (strongestNetwork < 0)
 		{
 			lastError = "no known networks found";
-			xTaskNotifyGive(transfer_request_taskhdl);
 			return;
 		}
 
@@ -560,13 +525,12 @@ pre(currentState == WiFiState::idle)
 		if (ssidIdx < 0)
 		{
 			lastError = "no data found for requested SSID";
-			xTaskNotifyGive(transfer_request_taskhdl);
 			return;
 		}
 	}
 
 	// ssidData contains the details of the strongest known access point
-	ConnectToAccessPoint(wp, false);
+	ConnectToAccessPoint(wp);
 }
 
 bool CheckValidSSID(const char * array s)
@@ -632,6 +596,8 @@ void StartAccessPoint()
 
 	if (ValidApData(apData))
 	{
+		esp_wifi_stop();
+
 		esp_wifi_restore();
 		esp_err_t res = esp_wifi_set_mode(WIFI_MODE_AP);
 
@@ -658,6 +624,8 @@ void StartAccessPoint()
 				ip_info.gw.addr = apData.gateway;
 				IP4_ADDR(&ip_info.netmask, 255,255,255,0);
 				res = tcpip_adapter_set_ip_info(TCPIP_ADAPTER_IF_AP, &ip_info);
+
+				tcpip_adapter_dhcps_start(TCPIP_ADAPTER_IF_AP);
 
 				if (res == ESP_OK) {
 					debugPrintf("Starting AP %s with password \"%s\"\n", currentSsid, apData.password);
@@ -690,28 +658,19 @@ void StartAccessPoint()
 				lastError = "Failed to start DNS\n";
 				debugPrintf("%s\n", lastError);
 			}
-
-			SafeStrncpy(currentSsid, apData.ssid, ARRAY_SIZE(currentSsid));
-			currentState = WiFiState::runningAsAccessPoint;
 			mdns_init();
-			RebuildServices();
-			xTaskNotifyGive(transfer_request_taskhdl);
 		}
 		else
 		{
 			esp_wifi_stop();
 			lastError = "Failed to start access point";
 			debugPrintf("%s\n", lastError);
-			currentState = WiFiState::idle;
-			xTaskNotifyGive(transfer_request_taskhdl);
 		}
 	}
 	else
 	{
 		lastError = "invalid access point configuration";
 		debugPrintf("%s\n", lastError);
-		currentState = WiFiState::idle;
-		xTaskNotifyGive(transfer_request_taskhdl);
 	}
 }
 
@@ -951,7 +910,6 @@ void IRAM_ATTR ProcessRequest()
 				else
 				{
 					lastError = "SSID table full";
-					xTaskNotifyGive(transfer_request_taskhdl);
 				}
 			}
 			else
@@ -979,7 +937,6 @@ void IRAM_ATTR ProcessRequest()
 				else
 				{
 					lastError = "SSID not found";
-					xTaskNotifyGive(transfer_request_taskhdl);
 				}
 			}
 			else
@@ -1105,7 +1062,6 @@ void IRAM_ATTR ProcessRequest()
 				else
 				{
 					lastError = "Listen failed";
-					xTaskNotifyGive(transfer_request_taskhdl);
 					debugPrint("Listen failed\n");
 				}
 			}
@@ -1177,7 +1133,6 @@ void IRAM_ATTR ProcessRequest()
 				if (written != acceptedLength)
 				{
 					lastError = "incomplete write";
-					xTaskNotifyGive(transfer_request_taskhdl);
 				}
 			}
 			else
@@ -1265,20 +1220,20 @@ void IRAM_ATTR ProcessRequest()
 			Connection::TerminateAll();						// terminate all connections
 			Listener::StopListening(0);						// stop listening on all ports
 			RebuildServices();								// remove the MDNS services
-			RemoveMdnsServices();
 			switch (currentState)
 			{
 			case WiFiState::connected:
 			case WiFiState::connecting:
 			case WiFiState::reconnecting:
+				RemoveMdnsServices();
 				delay(20);									// try to give lwip time to recover from stopping everything
-				esp_wifi_disconnect();
+				esp_wifi_stop();
 				break;
 
 			case WiFiState::runningAsAccessPoint:
 				dns.stop();
 				delay(20);									// try to give lwip time to recover from stopping everything
-				esp_wifi_disconnect();
+				esp_wifi_stop();
 				break;
 
 			default:
@@ -1303,17 +1258,25 @@ void IRAM_ATTR ProcessRequest()
 
 		default:
 			lastError = "bad deferred command";
-			xTaskNotifyGive(transfer_request_taskhdl);
 			break;
 		}
 	}
+
+	if (lastError != prevLastError) {
+		xTaskNotify(main_taskhdl, TFR_REQUEST, eSetBits);
+	}
 }
 
-static TaskHandle_t main_taskhdl;
+static TimerHandle_t tfrReqExpTmr;
 
-void IRAM_ATTR TransferReadyIsr(void *data)
+void IRAM_ATTR TransferReadyIsr(void* p)
 {
-	vTaskNotifyGiveFromISR(main_taskhdl, NULL);
+	BaseType_t wake = pdFALSE;
+	xTaskNotifyFromISR(main_taskhdl, SAM_TFR_READY, eSetBits, &wake);
+	if( wake == pdTRUE )
+	{
+		portYIELD_FROM_ISR();
+	}
 }
 
 void setup()
@@ -1324,14 +1287,16 @@ void setup()
 
 	ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-	ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_evt_handler, NULL));
-	ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, ESP_EVENT_ANY_ID, &wifi_evt_handler, NULL));
+	ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_START, &wifi_evt_handler, NULL));
+	ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &wifi_evt_handler, NULL));
+	ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_STOP, &wifi_evt_handler, NULL));
+	ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_evt_handler, NULL));
+	ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_START, &wifi_evt_handler, NULL));
+	ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_STOP, &wifi_evt_handler, NULL));
 
 	wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
 	cfg.nvs_enable = false;
 	ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-
-	wifiStatus = STATION_IDLE;
 
 	ssids = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, 
 													 ESP_PARTITION_SUBTYPE_DATA_NVS, 
@@ -1367,8 +1332,11 @@ void setup()
 	ONBOARD_LED = led_indicator_create(ONBOARD_LED_GPIO, &onboard_led_cfg);
 	led_indicator_start(ONBOARD_LED, ONBOARD_LED_IDLE);
 
-	xTaskCreate(transfer_request_task, "tfrReq", 512, NULL, TFR_REQ_PRIO, &transfer_request_taskhdl);
 	xTaskCreate(ConnectPoll, "connPoll", 1024, NULL, CONN_POLL_PRIO, &connect_poll_taskhdl);
+
+	tfrReqExpTmr = xTimerCreate("tfrReqTmr", StatusReportMillis, pdFALSE, NULL, 
+			[](void* data) { xTaskNotify(main_taskhdl, TFR_REQUEST_TIMEOUT, eSetBits); });
+	xTimerStart(tfrReqExpTmr, portMAX_DELAY);
 
 	gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
 	gpio_isr_handler_add(SamTfrReadyPin, TransferReadyIsr, nullptr);
@@ -1381,8 +1349,22 @@ void loop()
 	// See whether there is a request from the SAM.
 	// Duet WiFi 1.04 and earlier have hardware to ensure that TransferReady goes low when a transaction starts.
 	// Duet 3 Mini doesn't, so we need to see TransferReady go low and then high again. In case that happens so fast that we dn't get the interrupt, we have a timeout.
-	ulTaskNotifyTake(pdTRUE, TransferReadyTimeout);
-	if (gpio_get_level(SamTfrReadyPin) == 1) {
+	uint32_t flags = 0;
+	xTaskNotifyWait(0, UINT_MAX, &flags, TransferReadyTimeout);
+
+	if ((flags & TFR_REQUEST) || ((flags & TFR_REQUEST_TIMEOUT) &&
+		(lastError != nullptr || currentState != lastReportedState) ))
+	{
+		ets_delay_us(2);									// make sure the pin stays high for long enough for the SAM to see it
+		gpio_set_level(EspReqTransferPin, 0);			// force a low to high transition to signal that an error message is available
+		ets_delay_us(2);									// make sure it is low enough to create an interrupt when it goes high
+		gpio_set_level(EspReqTransferPin, 1);			// tell the SAM we are ready to receive a command
+		prevLastError = lastError;
+		xTimerReset(tfrReqExpTmr, portMAX_DELAY);
+	}
+
+	if (gpio_get_level(SamTfrReadyPin) == 1 && 
+		(flags == 0 || (flags & SAM_TFR_READY))) {
 		ProcessRequest();
 	}
 }
