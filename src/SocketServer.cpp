@@ -69,7 +69,7 @@ const uint32_t StatusReportMillis = 200;
 const int DefaultWiFiChannel = 6;
 
 // Global data
-char currentSsid[SsidLength + 1];
+static int currentSsid = -1;
 char webHostName[HostNameLength + 1] = "Duet-WiFi";
 
 DNSServer dns;
@@ -82,8 +82,8 @@ static WiFiState currentState = WiFiState::idle,
 static HSPIClass hspi;
 static uint32_t transferBuffer[NumDwords(MaxDataLength + 1)];
 
-static int ssidIdx = -1;
 static const esp_partition_t* ssids = nullptr;
+static SemaphoreHandle_t ssidsMutex = nullptr;
 
 static TaskHandle_t main_taskhdl;
 
@@ -113,14 +113,28 @@ typedef enum {
 
 static TaskHandle_t connect_poll_taskhdl;
 
+bool RetrieveSsidData(uint32_t idx, WirelessConfigurationData& data)
+{
+	if (idx <= MaxRememberedNetworks) {
+		xSemaphoreTake(ssidsMutex, portMAX_DELAY);
+		esp_err_t res = esp_partition_read(ssids, idx * sizeof(WirelessConfigurationData), &data, sizeof(WirelessConfigurationData));
+		xSemaphoreGive(ssidsMutex);
+
+		if (res == ESP_OK) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
 // Look up a SSID in our remembered network list, return pointer to it if found
 int RetrieveSsidData(const char *ssid, WirelessConfigurationData& data)
 {
 	for (size_t i = 1; i <= MaxRememberedNetworks; ++i)
 	{
 		WirelessConfigurationData d;
-		esp_partition_read(ssids, i * sizeof(WirelessConfigurationData), &d, sizeof(WirelessConfigurationData));
-		if (strncmp(ssid, d.ssid, sizeof(d.ssid)) == 0)
+		if (RetrieveSsidData(i, d) && strncmp(ssid, d.ssid, sizeof(d.ssid)) == 0)
 		{
 			data = d;
 			return i;
@@ -134,7 +148,9 @@ int FindEmptySsidEntry()
 	for (size_t i = 1; i <= MaxRememberedNetworks; ++i)
 	{
 		WirelessConfigurationData d;
+		xSemaphoreTake(ssidsMutex, portMAX_DELAY);
 		esp_partition_read(ssids, i * sizeof(WirelessConfigurationData), &d, sizeof(WirelessConfigurationData));
+		xSemaphoreGive(ssidsMutex);
 		if (d.ssid[0] == 0xFF)
 		{
 			return i;
@@ -157,7 +173,9 @@ bool ValidSocketNumber(uint8_t num)
 // Reset to default settings
 void FactoryReset()
 {
+	xSemaphoreTake(ssidsMutex, portMAX_DELAY);
 	esp_partition_erase_range(ssids, 0, ssids->size);
+	xSemaphoreGive(ssidsMutex);
 }
 
 static void wifi_evt_handler(void* arg, esp_event_base_t event_base,
@@ -170,10 +188,15 @@ static void wifi_evt_handler(void* arg, esp_event_base_t event_base,
 	} else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
 		wifi_event_sta_disconnected_t* disconnected = (wifi_event_sta_disconnected_t*) event_data;
 		switch (disconnected->reason) {
+			case WIFI_REASON_AUTH_EXPIRE:
+			case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:
 			case WIFI_REASON_AUTH_FAIL:
+			case WIFI_REASON_ASSOC_FAIL:
+			case WIFI_REASON_HANDSHAKE_TIMEOUT:
 				wifiEvt = STATION_WRONG_PASSWORD;
 				break;
 			case WIFI_REASON_NO_AP_FOUND:
+			case WIFI_REASON_BEACON_TIMEOUT:
 				wifiEvt = STATION_NO_AP_FOUND;
 				break;
 			case WIFI_REASON_ASSOC_LEAVE:
@@ -197,16 +220,16 @@ static void wifi_evt_handler(void* arg, esp_event_base_t event_base,
 // Rebuild the mDNS services
 void RebuildServices()
 {
-	ESP_ERROR_CHECK(mdns_service_remove_all());
-	ESP_ERROR_CHECK(mdns_hostname_set(webHostName));
+	mdns_service_remove_all();
+	mdns_hostname_set(webHostName);
 	for (size_t protocol = 0; protocol < 3; protocol++)
 	{
 		const uint16_t port = Listener::GetPortByProtocol(protocol);
 		if (port != 0)
 		{
-			ESP_ERROR_CHECK(mdns_service_add(webHostName, MdnsServiceStrings[protocol], "_tcp", port,
+			mdns_service_add(webHostName, MdnsServiceStrings[protocol], "_tcp", port,
 							(protocol == 0/*HttpProtocol*/) ? (mdns_txt_item_t*)MdnsTxtRecords : nullptr,
-							(protocol == 0/*HttpProtocol*/) ? 2 : 0));
+							(protocol == 0/*HttpProtocol*/) ? 2 : 0);
 		}
 	}
 }
@@ -221,14 +244,12 @@ void RemoveMdnsServices()
 void ConnectToAccessPoint(const WirelessConfigurationData& apData)
 pre(currentState == NetworkState::idle)
 {
-	SafeStrncpy(currentSsid, apData.ssid, ARRAY_SIZE(currentSsid));
-
 	wifi_config_t wifi_config;
 	SafeStrncpy((char*)wifi_config.sta.ssid, (char*)apData.ssid,
 		std::min(sizeof(wifi_config.sta.ssid), sizeof(apData.ssid)));
 	SafeStrncpy((char*)wifi_config.sta.password, (char*)apData.password,
 		std::min(sizeof(wifi_config.sta.password), sizeof(apData.password)));
-	ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config) );
+	esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config);
 
 	if (apData.ip != 0) {
 		tcpip_adapter_dhcpc_stop(TCPIP_ADAPTER_IF_STA);
@@ -236,10 +257,10 @@ pre(currentState == NetworkState::idle)
 		ip_info.ip.addr = apData.ip;
 		ip_info.gw.addr = apData.gateway;
 		ip_info.netmask.addr = apData.netmask;
-		ESP_ERROR_CHECK(tcpip_adapter_set_ip_info(TCPIP_ADAPTER_IF_STA, &ip_info));
+		tcpip_adapter_set_ip_info(TCPIP_ADAPTER_IF_STA, &ip_info);
 	}
 
-	ESP_ERROR_CHECK(tcpip_adapter_set_hostname(TCPIP_ADAPTER_IF_STA, webHostName));
+	tcpip_adapter_set_hostname(TCPIP_ADAPTER_IF_STA, webHostName);
 
 	debugPrintf("Trying to connect to ssid \"%s\" with password \"%s\"\n", apData.ssid, apData.password);
 	esp_wifi_connect();
@@ -296,6 +317,7 @@ void ConnectPoll(void* data)
 				break;
 
 			case STATION_GOT_IP:
+				xTimerStop(connect_expire_timer, portMAX_DELAY);
 				if (currentState == WiFiState::reconnecting)
 				{
 					lastError = "Reconnect succeeded";
@@ -314,79 +336,49 @@ void ConnectPoll(void* data)
 			{
 				strcpy(lastConnectError, error);
 				SafeStrncat(lastConnectError, " while trying to connect to ", ARRAY_SIZE(lastConnectError));
-				SafeStrncat(lastConnectError, currentSsid, ARRAY_SIZE(lastConnectError));
+				WirelessConfigurationData wp;
+				RetrieveSsidData(currentSsid, wp);
+				SafeStrncat(lastConnectError, wp.ssid, ARRAY_SIZE(lastConnectError));
 				lastError = lastConnectError;
 				connectErrorChanged = true;
 				debugPrint("Failed to connect to AP\n");
 
-				if (!retry)
-				{
+				if (!retry) {
 					esp_wifi_stop();
 				}
 			}
 			break;
 
 		case WiFiState::connected:
-			if (status != STATION_GOT_IP)
+			if (status == WIFI_IDLE) {
+				currentState = WiFiState::idle;							// disconnected/stopped Wi-Fi
+			} else if (status == STATION_WRONG_PASSWORD ||
+						status == STATION_NO_AP_FOUND ||
+						status == STATION_CONNECT_FAIL)
 			{
-				switch (status)
-				{
-				case STATION_CONNECTING:							// auto reconnecting
-					error = "auto reconnecting";
-					currentState = WiFiState::autoReconnecting;
-					break;
-
-				case WIFI_IDLE:
-					currentState = WiFiState::idle;					// disconnected/stopped Wi-Fi
-					break;
-
-				case STATION_WRONG_PASSWORD:
-					error = "state 'wrong password'";
-					currentState = WiFiState::idle;
-					break;
-
-				case STATION_NO_AP_FOUND:
-					error = "state 'no AP found'";
-					retry = true;
-					break;
-
-				case STATION_CONNECT_FAIL:
-					error = "state 'fail'";
-					retry = true;
-					break;
-
-				default:
-					error = "unknown WiFi state";
-					break;
-				}
-
-				if (error != nullptr)
-				{
-					strcpy(lastConnectError, "Lost connection, ");
-					SafeStrncat(lastConnectError, error, ARRAY_SIZE(lastConnectError));
-					lastError = lastConnectError;
-					connectErrorChanged = true;
-					debugPrint("Lost connection to AP\n");
-				}
+				currentState = WiFiState::autoReconnecting;
+				xTimerReset(connect_expire_timer, portMAX_DELAY);		// start the auto reconnect timer
+				esp_wifi_connect();
+				lastError = "Lost connection, auto reconnecting";
+				debugPrint("Lost connection to AP\n");
 				break;
 			}
 			break;
 
 		case WiFiState::autoReconnecting:
-			if (status == STATION_GOT_IP)
-			{
+			if (status == WIFI_IDLE) {
+				currentState = WiFiState::idle;							// disconnected/stopped Wi-Fi
+			} else if (status == STATION_GOT_IP) {
+				xTimerStop(connect_expire_timer, portMAX_DELAY);
 				lastError = "Auto reconnect succeeded";
 				currentState = WiFiState::connected;
-			}
-			else if (status != STATION_CONNECTING && lastError == nullptr)
-			{
-				lastError = "Auto reconnect failed, trying manual reconnect";
-				xTimerReset(connect_expire_timer, portMAX_DELAY);						// start the auto reconnect timer
-				retry = true;
-			}
-			else if (flags & CONNECT_EXPIRE)
-			{
-				lastError = "Timed out trying to auto-reconnect";
+			} else if (status != STATION_CONNECTING) {
+				if (status == STATION_CONNECT_TIMEOUT) {
+					lastError = "Timed out trying to auto-reconnect";
+				} else {
+					lastError = "Auto reconnect failed, trying manual reconnect";
+				}
+				xTimerReset(connect_expire_timer, portMAX_DELAY);		// start the reconnect timer
 				retry = true;
 			}
 			break;
@@ -396,6 +388,7 @@ void ConnectPoll(void* data)
 				currentState = WiFiState::runningAsAccessPoint;
 			} else if (status == STATION_CONNECTING) {
 				currentState = WiFiState::connecting;
+				xTimerReset(connect_expire_timer, portMAX_DELAY);		// start the econnect timer
 			}
 			break;
 
@@ -411,10 +404,10 @@ void ConnectPoll(void* data)
 
 		if (retry)
 		{
-			WirelessConfigurationData d;
-			esp_partition_read(ssids, ssidIdx * sizeof(WirelessConfigurationData), &d, sizeof(WirelessConfigurationData));
-			ConnectToAccessPoint(d);
+			WirelessConfigurationData wp;
+			RetrieveSsidData(currentSsid, wp);
 			currentState = WiFiState::reconnecting;
+			ConnectToAccessPoint(wp);
 		}
 
 		if (currentState != prevCurrentState) {
@@ -426,7 +419,7 @@ void ConnectPoll(void* data)
 			{
 				new_blink = ONBOARD_LED_CONNECTING;
 			} else if (currentState == WiFiState::connected || 
-					currentState == WiFiState::runningAsAccessPoint) {
+				currentState == WiFiState::runningAsAccessPoint) {
 				new_blink = ONBOARD_LED_CONNECTED;
 			} else {
 				new_blink = ONBOARD_LED_IDLE;
@@ -449,8 +442,6 @@ void ConnectPoll(void* data)
 void StartClient(const char * array ssid)
 pre(currentState == WiFiState::idle)
 {
-	esp_wifi_stop();
-
 	mdns_init();
 
 	WirelessConfigurationData wp;
@@ -464,10 +455,10 @@ pre(currentState == WiFiState::idle)
 	esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
 #endif
 
-	esp_wifi_start();
-
 	if (ssid == nullptr || ssid[0] == 0)
 	{
+		esp_wifi_start();
+
 		wifi_scan_config_t cfg;
 		cfg.ssid = NULL;
 		cfg.bssid = NULL;
@@ -515,19 +506,23 @@ pre(currentState == WiFiState::idle)
 		if (strongestNetwork < 0)
 		{
 			lastError = "no known networks found";
+			esp_wifi_stop();
 			return;
 		}
 
-		ssidIdx = RetrieveSsidData(ssid, wp);
+		currentSsid = RetrieveSsidData(ssid, wp);
 	}
 	else
 	{
-		ssidIdx = RetrieveSsidData(ssid, wp);
-		if (ssidIdx < 0)
+		int idx = RetrieveSsidData(ssid, wp);
+		if (idx < 0)
 		{
 			lastError = "no data found for requested SSID";
 			return;
 		}
+
+		esp_wifi_start();
+		currentSsid = idx;
 	}
 
 	// ssidData contains the details of the strongest known access point
@@ -593,21 +588,20 @@ bool ValidApData(const WirelessConfigurationData &apData)
 void StartAccessPoint()
 {
 	WirelessConfigurationData apData;
+	xSemaphoreTake(ssidsMutex, portMAX_DELAY);
 	esp_partition_read(ssids, 0, &apData, sizeof(WirelessConfigurationData));
+	xSemaphoreGive(ssidsMutex);
 
 	if (ValidApData(apData))
 	{
-		esp_wifi_stop();
-
 		esp_wifi_restore();
 		esp_err_t res = esp_wifi_set_mode(WIFI_MODE_AP);
 
-		SafeStrncpy(currentSsid, apData.ssid, ARRAY_SIZE(currentSsid));
 		if (res == ESP_OK)
 		{
 			wifi_config_t wifi_config;
-			SafeStrncpy((char*)wifi_config.sta.ssid, currentSsid,
-				std::min(sizeof(wifi_config.sta.ssid), sizeof(currentSsid)));
+			SafeStrncpy((char*)wifi_config.sta.ssid, apData.ssid,
+				std::min(sizeof(wifi_config.sta.ssid), sizeof(apData.ssid)));
 			SafeStrncpy((char*)wifi_config.sta.password, (char*)apData.password,
 				std::min(sizeof(wifi_config.sta.password), sizeof(apData.password)));
 			wifi_config.ap.authmode = WIFI_AUTH_WPA_WPA2_PSK;
@@ -629,7 +623,7 @@ void StartAccessPoint()
 				tcpip_adapter_dhcps_start(TCPIP_ADAPTER_IF_AP);
 
 				if (res == ESP_OK) {
-					debugPrintf("Starting AP %s with password \"%s\"\n", currentSsid, apData.password);
+					debugPrintf("Starting AP %s with password \"%s\"\n", apData.ssid, apData.password);
 					res = esp_wifi_start();
 				}
 
@@ -663,7 +657,6 @@ void StartAccessPoint()
 		}
 		else
 		{
-			esp_wifi_stop();
 			lastError = "Failed to start access point";
 			debugPrintf("%s\n", lastError);
 		}
@@ -874,9 +867,11 @@ void IRAM_ATTR ProcessRequest()
 				response->zero1 = 0;
 				response->zero2 = 0;
 				response->vcc = esp_wifi_get_vdd33();
+				WirelessConfigurationData wp;
+				RetrieveSsidData(currentSsid, wp);
 				SafeStrncpy(response->versionText, firmwareVersion, sizeof(response->versionText));
 				SafeStrncpy(response->hostName, webHostName, sizeof(response->hostName));
-				SafeStrncpy(response->ssid, currentSsid, sizeof(response->ssid));
+				SafeStrncpy(response->ssid, wp.ssid, sizeof(response->ssid));
 				response->clockReg = REG(SPI_CLOCK(HSPI));
 				SendResponse(sizeof(NetworkStatusResponse));
 			}
@@ -906,7 +901,9 @@ void IRAM_ATTR ProcessRequest()
 
 				if (index >= 0)
 				{
+					xSemaphoreTake(ssidsMutex, portMAX_DELAY);
 					esp_partition_write(ssids, index * sizeof(WirelessConfigurationData), receivedClientData, sizeof(WirelessConfigurationData));
+					xSemaphoreGive(ssidsMutex);
 				}
 				else
 				{
@@ -932,8 +929,9 @@ void IRAM_ATTR ProcessRequest()
 				{
 					WirelessConfigurationData localSsidData;
 					memset(&localSsidData, 0xFF, sizeof(localSsidData));
-
+					xSemaphoreTake(ssidsMutex, portMAX_DELAY);
 					esp_partition_write(ssids, index * sizeof(WirelessConfigurationData), &localSsidData, sizeof(WirelessConfigurationData));
+					xSemaphoreGive(ssidsMutex);
 				}
 				else
 				{
@@ -958,7 +956,9 @@ void IRAM_ATTR ProcessRequest()
 				{
 
 					WirelessConfigurationData tempData;
+					xSemaphoreTake(ssidsMutex, portMAX_DELAY);
 					esp_partition_read(ssids, i * sizeof(WirelessConfigurationData), &tempData, sizeof(WirelessConfigurationData));
+					xSemaphoreGive(ssidsMutex);
 					if (tempData.ssid[0] != 0xFF)
 					{
 						memcpy(p, &tempData, ReducedWirelessConfigurationDataSize);
@@ -981,7 +981,9 @@ void IRAM_ATTR ProcessRequest()
 				for (size_t i = 0; i <= MaxRememberedNetworks; ++i)
 				{
 					WirelessConfigurationData tempData;
+					xSemaphoreTake(ssidsMutex, portMAX_DELAY);
 					esp_partition_read(ssids, i * sizeof(WirelessConfigurationData), &tempData, sizeof(WirelessConfigurationData));
+					xSemaphoreGive(ssidsMutex);
 					if (tempData.ssid[0] != 0xFF)
 					{
 						for (size_t j = 0; j < SsidLength && tempData.ssid[j] != 0; ++j)
@@ -1283,6 +1285,7 @@ void IRAM_ATTR TransferReadyIsr(void* p)
 void setup()
 {
 	main_taskhdl = xTaskGetCurrentTaskHandle();
+	ssidsMutex = xSemaphoreCreateMutex();
 
 	tcpip_adapter_init();
 
@@ -1334,7 +1337,7 @@ void setup()
 	ONBOARD_LED = led_indicator_create(ONBOARD_LED_GPIO, &onboard_led_cfg);
 	led_indicator_start(ONBOARD_LED, ONBOARD_LED_IDLE);
 
-	xTaskCreate(ConnectPoll, "connPoll", 512, NULL, CONN_POLL_PRIO, &connect_poll_taskhdl);
+	xTaskCreate(ConnectPoll, "connPoll", 1024, NULL, CONN_POLL_PRIO, &connect_poll_taskhdl);
 
 	tfrReqExpTmr = xTimerCreate("tfrReqTmr", StatusReportMillis, pdFALSE, NULL, 
 			[](void* data) { xTaskNotify(main_taskhdl, TFR_REQUEST_TIMEOUT, eSetBits); });
