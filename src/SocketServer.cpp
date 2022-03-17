@@ -29,6 +29,8 @@ extern "C"
 #include "esp_partition.h"
 #include "driver/ledc.h"
 #include "mdns.h"
+#include "nvs_flash.h"
+#include "nvs.h"
 
 #include "led_indicator.h"
 
@@ -82,8 +84,6 @@ static WiFiState currentState = WiFiState::idle,
 static HSPIClass hspi;
 static uint32_t transferBuffer[NumDwords(MaxDataLength + 1)];
 
-static const esp_partition_t* ssids = nullptr;
-static SemaphoreHandle_t ssidsMutex = nullptr;
 
 static TaskHandle_t main_taskhdl;
 
@@ -113,28 +113,27 @@ typedef enum {
 
 static TaskHandle_t connect_poll_taskhdl;
 
-bool RetrieveSsidData(uint32_t idx, WirelessConfigurationData& data)
+static nvs_handle_t ssids;
+static const char* ssidsNs = "ssids";
+
+bool GetSsidDataByIndex(int idx, WirelessConfigurationData& data)
 {
 	if (idx <= MaxRememberedNetworks) {
-		xSemaphoreTake(ssidsMutex, portMAX_DELAY);
-		esp_err_t res = esp_partition_read(ssids, idx * sizeof(WirelessConfigurationData), &data, sizeof(WirelessConfigurationData));
-		xSemaphoreGive(ssidsMutex);
-
-		if (res == ESP_OK) {
-			return true;
-		}
+		size_t sz = sizeof(data);
+		esp_err_t res = nvs_get_blob(ssids, std::to_string(idx).c_str(), &data, &sz);
+		return (res == ESP_OK) && (sz == sizeof(data));
 	}
 
 	return false;
 }
 
 // Look up a SSID in our remembered network list, return pointer to it if found
-int RetrieveSsidData(const char *ssid, WirelessConfigurationData& data)
+int GetSsidDataByName(const char* ssid, WirelessConfigurationData& data)
 {
-	for (size_t i = 1; i <= MaxRememberedNetworks; ++i)
+	for (int i = MaxRememberedNetworks; i >= 0; i--)
 	{
 		WirelessConfigurationData d;
-		if (RetrieveSsidData(i, d) && strncmp(ssid, d.ssid, sizeof(d.ssid)) == 0)
+		if (GetSsidDataByIndex(i, d) && strncmp(ssid, d.ssid, sizeof(d.ssid)) == 0)
 		{
 			data = d;
 			return i;
@@ -145,18 +144,39 @@ int RetrieveSsidData(const char *ssid, WirelessConfigurationData& data)
 
 int FindEmptySsidEntry()
 {
-	for (size_t i = 1; i <= MaxRememberedNetworks; ++i)
+	for (int i = MaxRememberedNetworks; i >= 0; i--)
 	{
 		WirelessConfigurationData d;
-		xSemaphoreTake(ssidsMutex, portMAX_DELAY);
-		esp_partition_read(ssids, i * sizeof(WirelessConfigurationData), &d, sizeof(WirelessConfigurationData));
-		xSemaphoreGive(ssidsMutex);
-		if (d.ssid[0] == 0xFF)
+		if (GetSsidDataByIndex(i, d) && d.ssid[0] == 0xFF)
 		{
 			return i;
 		}
 	}
+
 	return -1;
+}
+
+bool SetSsidData(int idx, const WirelessConfigurationData& data, bool commit=true)
+{
+	if (idx <= MaxRememberedNetworks) {
+		esp_err_t res = nvs_set_blob(ssids, std::to_string(idx).c_str(), &data, sizeof(data));
+
+		if (res == ESP_OK && commit) {
+			res = nvs_commit(ssids);
+		}
+
+		return res == ESP_OK;
+	}
+
+	return false;
+}
+
+bool EraseSsidData(int idx, bool commit = true)
+{
+	uint8_t clean[sizeof(WirelessConfigurationData)];
+	memset(clean, 0xFF, sizeof(clean));
+	const WirelessConfigurationData& d = *(reinterpret_cast<const WirelessConfigurationData*>(clean));
+	return SetSsidData(idx, d, commit);
 }
 
 // Check socket number in range, returning true if yes. Otherwise, set lastError and return false;
@@ -173,9 +193,12 @@ bool ValidSocketNumber(uint8_t num)
 // Reset to default settings
 void FactoryReset()
 {
-	xSemaphoreTake(ssidsMutex, portMAX_DELAY);
-	esp_partition_erase_range(ssids, 0, ssids->size);
-	xSemaphoreGive(ssidsMutex);
+	for (int i = MaxRememberedNetworks; i >= 0; i--)
+	{
+		EraseSsidData(i, false);
+	}
+
+	nvs_commit(ssids);
 }
 
 static void wifi_evt_handler(void* arg, esp_event_base_t event_base,
@@ -337,7 +360,7 @@ void ConnectPoll(void* data)
 				strcpy(lastConnectError, error);
 				SafeStrncat(lastConnectError, " while trying to connect to ", ARRAY_SIZE(lastConnectError));
 				WirelessConfigurationData wp;
-				RetrieveSsidData(currentSsid, wp);
+				GetSsidDataByIndex(currentSsid, wp);
 				SafeStrncat(lastConnectError, wp.ssid, ARRAY_SIZE(lastConnectError));
 				lastError = lastConnectError;
 				connectErrorChanged = true;
@@ -405,7 +428,7 @@ void ConnectPoll(void* data)
 		if (retry)
 		{
 			WirelessConfigurationData wp;
-			RetrieveSsidData(currentSsid, wp);
+			GetSsidDataByIndex(currentSsid, wp);
 			currentState = WiFiState::reconnecting;
 			ConnectToAccessPoint(wp);
 		}
@@ -487,7 +510,7 @@ pre(currentState == WiFiState::idle)
 			if (strongestNetwork < 0 || ap_records[i].rssi > ap_records[strongestNetwork].rssi)
 			{
 				WirelessConfigurationData temp;
-				if (RetrieveSsidData((const char*)ap_records[i].ssid, temp) > 0)
+				if (GetSsidDataByName((const char*)ap_records[i].ssid, temp) > 0)
 				{
 					strongestNetwork = i;
 				}
@@ -510,12 +533,12 @@ pre(currentState == WiFiState::idle)
 			return;
 		}
 
-		currentSsid = RetrieveSsidData(ssid, wp);
+		currentSsid = GetSsidDataByName(ssid, wp);
 	}
 	else
 	{
-		int idx = RetrieveSsidData(ssid, wp);
-		if (idx < 0)
+		int idx = GetSsidDataByName(ssid, wp);
+		if (idx <= 0)
 		{
 			lastError = "no data found for requested SSID";
 			return;
@@ -588,11 +611,7 @@ bool ValidApData(const WirelessConfigurationData &apData)
 void StartAccessPoint()
 {
 	WirelessConfigurationData apData;
-	xSemaphoreTake(ssidsMutex, portMAX_DELAY);
-	esp_partition_read(ssids, 0, &apData, sizeof(WirelessConfigurationData));
-	xSemaphoreGive(ssidsMutex);
-
-	if (ValidApData(apData))
+	if (GetSsidDataByIndex(0, apData) && ValidApData(apData))
 	{
 		esp_wifi_restore();
 		esp_err_t res = esp_wifi_set_mode(WIFI_MODE_AP);
@@ -868,7 +887,7 @@ void IRAM_ATTR ProcessRequest()
 				response->zero2 = 0;
 				response->vcc = esp_wifi_get_vdd33();
 				WirelessConfigurationData wp;
-				RetrieveSsidData(currentSsid, wp);
+				GetSsidDataByIndex(currentSsid, wp);
 				SafeStrncpy(response->versionText, firmwareVersion, sizeof(response->versionText));
 				SafeStrncpy(response->hostName, webHostName, sizeof(response->hostName));
 				SafeStrncpy(response->ssid, wp.ssid, sizeof(response->ssid));
@@ -892,18 +911,19 @@ void IRAM_ATTR ProcessRequest()
 				else
 				{
 					WirelessConfigurationData d;
-					index = RetrieveSsidData(receivedClientData->ssid, d);
+					index = GetSsidDataByName(receivedClientData->ssid, d);
 					if (index < 0)
 					{
 						index = FindEmptySsidEntry();
+						if (index == 0) { // reserved for AP details
+							index = -1;
+						}
 					}
 				}
 
 				if (index >= 0)
 				{
-					xSemaphoreTake(ssidsMutex, portMAX_DELAY);
-					esp_partition_write(ssids, index * sizeof(WirelessConfigurationData), receivedClientData, sizeof(WirelessConfigurationData));
-					xSemaphoreGive(ssidsMutex);
+					SetSsidData(index, *receivedClientData);
 				}
 				else
 				{
@@ -923,15 +943,11 @@ void IRAM_ATTR ProcessRequest()
 				hspi.transferDwords(nullptr, transferBuffer, NumDwords(SsidLength));
 
 				WirelessConfigurationData d;
-				int index = RetrieveSsidData(reinterpret_cast<char*>(transferBuffer), d);
+				int index = GetSsidDataByName(reinterpret_cast<char*>(transferBuffer), d);
 
 				if (index >= 0)
 				{
-					WirelessConfigurationData localSsidData;
-					memset(&localSsidData, 0xFF, sizeof(localSsidData));
-					xSemaphoreTake(ssidsMutex, portMAX_DELAY);
-					esp_partition_write(ssids, index * sizeof(WirelessConfigurationData), &localSsidData, sizeof(WirelessConfigurationData));
-					xSemaphoreGive(ssidsMutex);
+					EraseSsidData(index);
 				}
 				else
 				{
@@ -956,9 +972,7 @@ void IRAM_ATTR ProcessRequest()
 				{
 
 					WirelessConfigurationData tempData;
-					xSemaphoreTake(ssidsMutex, portMAX_DELAY);
-					esp_partition_read(ssids, i * sizeof(WirelessConfigurationData), &tempData, sizeof(WirelessConfigurationData));
-					xSemaphoreGive(ssidsMutex);
+					GetSsidDataByIndex(i, tempData);
 					if (tempData.ssid[0] != 0xFF)
 					{
 						memcpy(p, &tempData, ReducedWirelessConfigurationDataSize);
@@ -981,9 +995,7 @@ void IRAM_ATTR ProcessRequest()
 				for (size_t i = 0; i <= MaxRememberedNetworks; ++i)
 				{
 					WirelessConfigurationData tempData;
-					xSemaphoreTake(ssidsMutex, portMAX_DELAY);
-					esp_partition_read(ssids, i * sizeof(WirelessConfigurationData), &tempData, sizeof(WirelessConfigurationData));
-					xSemaphoreGive(ssidsMutex);
+					GetSsidDataByIndex(i, tempData);
 					if (tempData.ssid[0] != 0xFF)
 					{
 						for (size_t j = 0; j < SsidLength && tempData.ssid[j] != 0; ++j)
@@ -1285,9 +1297,16 @@ void IRAM_ATTR TransferReadyIsr(void* p)
 void setup()
 {
 	main_taskhdl = xTaskGetCurrentTaskHandle();
-	ssidsMutex = xSemaphoreCreateMutex();
 
 	tcpip_adapter_init();
+
+	nvs_flash_init();
+	nvs_open(ssidsNs, NVS_READWRITE, &ssids);
+	nvs_iterator_t savedSsids = nvs_entry_find("nvs", ssidsNs, NVS_TYPE_ANY);
+	if (!savedSsids) {
+		FactoryReset();
+	}
+	nvs_release_iterator(savedSsids);
 
 	ESP_ERROR_CHECK(esp_event_loop_create_default());
 
@@ -1303,12 +1322,7 @@ void setup()
 	ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
 	esp_log_level_set("wifi", ESP_LOG_NONE);
-	ssids = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, 
-													 ESP_PARTITION_SUBTYPE_DATA_NVS, 
-													 "ssids");
 
-	const size_t eepromSizeNeeded = (MaxRememberedNetworks + 1) * sizeof(WirelessConfigurationData);
-	assert(eepromSizeNeeded < ssids->size);
 
 	// Set up the SPI subsystem
 	gpio_reset_pin(SamTfrReadyPin);
@@ -1337,7 +1351,7 @@ void setup()
 	ONBOARD_LED = led_indicator_create(ONBOARD_LED_GPIO, &onboard_led_cfg);
 	led_indicator_start(ONBOARD_LED, ONBOARD_LED_IDLE);
 
-	xTaskCreate(ConnectPoll, "connPoll", 1024, NULL, CONN_POLL_PRIO, &connect_poll_taskhdl);
+	xTaskCreate(ConnectPoll, "connPoll", 1536, NULL, CONN_POLL_PRIO, &connect_poll_taskhdl);
 
 	tfrReqExpTmr = xTimerCreate("tfrReqTmr", StatusReportMillis, pdFALSE, NULL, 
 			[](void* data) { xTaskNotify(main_taskhdl, TFR_REQUEST_TIMEOUT, eSetBits); });

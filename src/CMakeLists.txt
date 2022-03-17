@@ -16,7 +16,7 @@ endif()
 idf_component_register(SRCS "${srcs}"
                        INCLUDE_DIRS "${include_dirs}"
                        REQUIRES spi_flash mdns
-                       PRIV_REQUIRES indicator)
+                       PRIV_REQUIRES indicator nvs_flash)
 
 idf_build_get_property(python PYTHON)
 idf_build_get_property(build_dir BUILD_DIR)
