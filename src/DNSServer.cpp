@@ -34,7 +34,7 @@ void DNSServer::task(void* p)
       }
 
       server->processNextRequest();
-      xTaskNotify(server->taskHandle, 0, eNoAction);
+      xTaskNotify(server->taskHdl, 0, eNoAction);
     } else {
       if (server->_udp) {
         netconn_close(server->_udp);
@@ -76,11 +76,11 @@ bool DNSServer::start(const uint16_t &port, const std::string &domainName,
   _resolvedIP[3] = resolvedIPAddr[3];
   downcaseAndRemoveWwwPrefix(_domainName);
 
-  if (!taskHandle) {
-    xTaskCreate(&task, "dnsSrv", 512, this, DNS_SERVER_PRIO, &taskHandle);
+  if (!taskHdl) {
+    xTaskCreate(&task, "dnsSrv", DNS_SERVER_STACK, this, DNS_SERVER_PRIO, &taskHdl);
   }
 
-  xTaskNotify(taskHandle, SERVER_START, eSetValueWithOverwrite);
+  xTaskNotify(taskHdl, SERVER_START, eSetValueWithOverwrite);
 
   return true;
 }
@@ -97,7 +97,7 @@ void DNSServer::setTTL(const uint32_t &ttl)
 
 void DNSServer::stop()
 {
-  xTaskNotify(taskHandle, SERVER_STOP, eSetValueWithOverwrite);
+  xTaskNotify(taskHdl, SERVER_STOP, eSetValueWithOverwrite);
 }
 
 void DNSServer::downcaseAndRemoveWwwPrefix(std::string &domainName)
@@ -115,7 +115,7 @@ void DNSServer::processNextRequest()
 
   _currentPacketSize = data ? netbuf_len(data) : 0;
 
-  if (_currentPacketSize > 0) 
+  if (_currentPacketSize > 0)
   {
     _remotePort = netbuf_fromport(data);
     memcpy(&_remoteIp, netbuf_fromaddr(data), sizeof(_remoteIp));
@@ -188,8 +188,8 @@ void DNSServer::replyWithIP()
   if (_buffer == NULL) return;
   _dnsHeader->QR = DNS_QR_RESPONSE;
   _dnsHeader->ANCount = _dnsHeader->QDCount;
-  _dnsHeader->QDCount = _dnsHeader->QDCount; 
-  // _dnsHeader->RA = 1;  
+  _dnsHeader->QDCount = _dnsHeader->QDCount;
+  // _dnsHeader->RA = 1;
 
   struct netbuf* data = netbuf_new();
   uint8_t* allocd = (uint8_t*)netbuf_alloc(data, _currentPacketSize + 16);
@@ -217,8 +217,8 @@ void DNSServer::replyWithIP()
   netconn_sendto(_udp, data, &_remoteIp, _remotePort);
   netbuf_delete(data);
 
-  debugPrintf("DNS responds: %u.%u.%u.%u for %s\n", 
-            _resolvedIP[0], _resolvedIP[1], _resolvedIP[2], _resolvedIP[3], 
+  debugPrintf("DNS responds: %u.%u.%u.%u for %s\n",
+            _resolvedIP[0], _resolvedIP[1], _resolvedIP[2], _resolvedIP[3],
             getDomainNameWithoutWwwPrefix().c_str());
 }
 

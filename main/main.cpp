@@ -12,7 +12,7 @@ extern void loop();
 
 extern "C" void app_main()
 {
-	vTaskPrioritySet(NULL, MAIN_TASK_PRIO);
+	vTaskPrioritySet(NULL, MAIN_PRIO);
 	setup();
 	while (true) {
 		loop ();

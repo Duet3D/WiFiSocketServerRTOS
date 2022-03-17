@@ -113,10 +113,9 @@ size_t IRAM_ATTR Connection::Write(const uint8_t *data, size_t length, bool doPu
 
 	size_t total = 0;
 	size_t written = 0;
-	int loop = 0;
 	err_t rc = ERR_OK;
 
-	for( ; total < length; total += written, loop++) {
+	for( ; total < length; total += written) {
 		written = 0;
 		rc = netconn_write_partly(ownPcb, data + total, length - total, flag, &written);
 
@@ -130,22 +129,23 @@ size_t IRAM_ATTR Connection::Write(const uint8_t *data, size_t length, bool doPu
 		// We failed to write the data. See above for possible mitigations. For now we just terminate the connection.
 		debugPrintfAlways("Write fail len=%u err=%d\n", total, (int)rc);
 		Close(false);		// chrishamm: Not sure if this helps with LwIP v1.4.3 but it is mandatory for proper error handling with LwIP 2.0.3
-	} else {
-		// Close the connection again when we're done
-		if (closeAfterSending)
-		{
-			Close(true);
-		}
+		return 0;
+	}
+	// Close the connection again when we're done
+	if (closeAfterSending)
+	{
+		Close(true);
 	}
 
-	return total;
+	return length;
 }
 
 size_t IRAM_ATTR Connection::CanWrite() const
 {
 	// Return the amount of free space in the write buffer
 	// Note: we cannot necessarily write this amount, because it depends on memory allocations being successful.
-	return ((state == ConnState::connected) && ownPcb->pcb.tcp) ? tcp_sndbuf(ownPcb->pcb.tcp) : 0;
+	return ((state == ConnState::connected) && ownPcb->pcb.tcp) ?
+		std::min((size_t)tcp_sndbuf(ownPcb->pcb.tcp), MaxDataLength) : 0;
 }
 
 size_t IRAM_ATTR Connection::Read(uint8_t *data, size_t length)
@@ -184,8 +184,7 @@ size_t IRAM_ATTR Connection::Read(uint8_t *data, size_t length)
 size_t IRAM_ATTR Connection::CanRead() const
 {
 	return ((state == ConnState::connected || state == ConnState::otherEndClosed) && pb != nullptr)
-			? pb->tot_len - readIndex
-				: 0;
+			? pb->tot_len - readIndex : 0;
 }
 
 void Connection::Report()
@@ -272,16 +271,6 @@ void Connection::FreePbuf()
 	return count;
 }
 
-/*static*/ void Connection::PollOne()
-{
-	Connection::Get(nextConnectionToPoll).Poll();
-	++nextConnectionToPoll;
-	if (nextConnectionToPoll == MaxConnections)
-	{
-		nextConnectionToPoll = 0;
-	}
-}
-
 /*static*/ void Connection::TerminateAll()
 {
 	for (size_t i = 0; i < MaxConnections; ++i)
@@ -320,6 +309,5 @@ void Connection::FreePbuf()
 
 // Static data
 Connection *Connection::connectionList[MaxConnections] = { 0 };
-size_t Connection::nextConnectionToPoll = 0;
 
 // End

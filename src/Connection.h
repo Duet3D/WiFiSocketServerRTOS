@@ -44,7 +44,6 @@ public:
 	static Connection *Allocate();
 	static Connection& Get(uint8_t num) { return *connectionList[num]; }
 	static uint16_t CountConnectionsOnPort(uint16_t port);
-	static void PollOne();
 	static void ReportConnections();
 	static void GetSummarySocketStatus(uint16_t& connectedSockets, uint16_t& otherEndClosedSockets);
 	static void TerminateAll();
@@ -65,15 +64,12 @@ private:
 	uint16_t remotePort;
 
 	uint32_t remoteIp;
-	uint32_t closeTimer;
-	volatile size_t unAcked;	// how much data we have sent but hasn't been acknowledged
 	size_t readIndex;			// how much data we have already read from the current pbuf
 	size_t alreadyRead;			// how much data we read from previous pbufs and didn't tell LWIP about yet
 	struct netconn *ownPcb;		// the pcb that corresponds to this connection
 	pbuf *pb;					// the buffers holding data we have received that has not yet been taken
 
 	static Connection *connectionList[MaxConnections];
-	static size_t nextConnectionToPoll;
 };
 
 #endif /* SRC_CONNECTION_H_ */

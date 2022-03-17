@@ -70,7 +70,7 @@ class DNSServer
     ip_addr_t _remoteIp;
     uint16_t _remotePort;
 
-    TaskHandle_t taskHandle;
+    TaskHandle_t taskHdl;
     static void task(void* p);
 
     void downcaseAndRemoveWwwPrefix(std::string &domainName);

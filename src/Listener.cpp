@@ -17,30 +17,10 @@ Listener *Listener::freeList = nullptr;
 SemaphoreHandle_t Listener::listMutex = nullptr;
 TaskHandle_t Listener::taskHdl = nullptr;
 
-void Listener::netconn_cb(struct netconn *conn, enum netconn_evt evt, u16_t len)
-{
-	if (evt == NETCONN_EVT_RCVPLUS && len == 0) {
-		xTaskNotifyGive(taskHdl);
-	}
-}
-
 // Member functions
 Listener::Listener()
 	: next(nullptr), listeningPcb(nullptr), ip(0), port(0), maxConnections(0), protocol(0)
 {
-}
-
-void Listener::task(void* p)
-{
-	while(ulTaskNotifyTake(pdTRUE, portMAX_DELAY)) {
-		Listener::Poll();
-	}
-}
-
-void Listener::Init()
-{
-	listMutex = xSemaphoreCreateRecursiveMutex();
-	xTaskCreate(task, "lstn", 512, NULL, LISTEN_PRIO, &taskHdl);
 }
 
 void Listener::Accept()
@@ -111,6 +91,26 @@ void Listener::Poll()
 	xSemaphoreGiveRecursive(listMutex);
 }
 
+/*static*/ void Listener::netconn_cb(struct netconn *conn, enum netconn_evt evt, u16_t len)
+{
+	if (evt == NETCONN_EVT_RCVPLUS && len == 0) {
+		xTaskNotifyGive(taskHdl);
+	}
+}
+
+/*static*/ void Listener::task(void* p)
+{
+	while(ulTaskNotifyTake(pdTRUE, portMAX_DELAY)) {
+		Listener::Poll();
+	}
+}
+
+/*static*/ void Listener::Init()
+{
+	listMutex = xSemaphoreCreateRecursiveMutex();
+	xTaskCreate(task, "listenTask", LISTEN_STACK, NULL, LISTEN_PRIO, &taskHdl);
+}
+
 // Set up a listener on a port, returning true if successful, or stop listening of maxConnections = 0
 /*static*/ bool Listener::Listen(uint32_t ip, uint16_t port, uint8_t protocol, uint16_t maxConns)
 {
@@ -167,7 +167,7 @@ void Listener::Poll()
 
 	ip_addr_t tempIp;
 	tempIp.u_addr.ip4.addr = ip;
-	tempPcb->pcb.tcp->so_options |= SOF_REUSEADDR;			// not sure we need this, but the Arduino HTTP server does it
+	ip_set_option(tempPcb->pcb.tcp, SOF_REUSEADDR); 			// not sure we need this, but the Arduino HTTP server does it
 	err_t rc = netconn_bind(tempPcb, &tempIp, port);
 	if (rc != ERR_OK)
 	{
