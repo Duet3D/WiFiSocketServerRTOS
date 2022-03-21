@@ -723,6 +723,7 @@ void IRAM_ATTR ProcessRequest()
 	messageHeaderOut.hdr.state = currentState;
 	bool deferCommand = false;
 
+
 	// Begin the transaction
 	gpio_set_level(SamSSPin, 0);		// assert CS to SAM
 	hspi.beginTransaction();
@@ -1102,7 +1103,7 @@ void IRAM_ATTR ProcessRequest()
 			if (ValidSocketNumber(messageHeaderIn.hdr.socketNumber))
 			{
 				messageHeaderIn.hdr.param32 = hspi.transfer32(ResponseEmpty);
-				Connection::Get(messageHeaderIn.hdr.socketNumber).Close(true);
+				Connection::Get(messageHeaderIn.hdr.socketNumber).Terminate(true);
 			}
 			else
 			{
@@ -1114,7 +1115,7 @@ void IRAM_ATTR ProcessRequest()
 			if (ValidSocketNumber(messageHeaderIn.hdr.socketNumber))
 			{
 				messageHeaderIn.hdr.param32 = hspi.transfer32(ResponseEmpty);
-				Connection::Get(messageHeaderIn.hdr.socketNumber).Close(true);
+				Connection::Get(messageHeaderIn.hdr.socketNumber).Close();
 			}
 			else
 			{
@@ -1164,7 +1165,7 @@ void IRAM_ATTR ProcessRequest()
 				messageHeaderIn.hdr.param32 = hspi.transfer32(sizeof(ConnStatusResponse));
 				Connection& conn = Connection::Get(messageHeaderIn.hdr.socketNumber);
 				ConnStatusResponse resp;
-				conn.Poll();
+				conn.PollRead();
 				conn.GetStatus(resp);
 				Connection::GetSummarySocketStatus(resp.connectedSockets, resp.otherEndClosedSockets);
 				hspi.transferDwords(reinterpret_cast<const uint32_t *>(&resp), nullptr, NumDwords(sizeof(resp)));
@@ -1378,6 +1379,8 @@ void IRAM_ATTR loop()
 		prevLastError = lastError;
 		xTimerReset(tfrReqExpTmr, portMAX_DELAY);
 	}
+
+	Connection::PollAll();
 
 	if (gpio_get_level(SamTfrReadyPin) == 1 &&
 		(flags == 0 || (flags & SAM_TFR_READY))) {
