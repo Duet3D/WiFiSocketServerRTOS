@@ -179,14 +179,16 @@ bool ValidSocketNumber(uint8_t num)
 }
 
 // Reset to default settings
-void FactoryReset()
+void FactoryReset(bool commit=true)
 {
 	for (int i = MaxRememberedNetworks; i >= 0; i--)
 	{
 		EraseSsidData(i, false);
 	}
 
-	nvs_commit(ssids);
+	if (commit) {
+		nvs_commit(ssids);
+	}
 }
 
 static void HandleWiFiEvent(void* arg, esp_event_base_t event_base,
@@ -1308,6 +1310,7 @@ void IRAM_ATTR TransferReadyIsr(void* p)
 
 void setup()
 {
+
 	mainTaskHdl = xTaskGetCurrentTaskHandle();
 
 	// Setup Wi-Fi
@@ -1330,11 +1333,35 @@ void setup()
 
 	esp_log_level_set("wifi", ESP_LOG_NONE);
 
-	nvs_flash_init();
-	nvs_open(ssidsNs, NVS_READWRITE, &ssids);
-	nvs_iterator_t savedSsids = nvs_entry_find(NVS_DEFAULT_PART_NAME, ssidsNs, NVS_TYPE_ANY);
+	nvs_flash_init_partition(ssidsNs);
+	nvs_open_from_partition(ssidsNs, ssidsNs, NVS_READWRITE, &ssids);
+	nvs_iterator_t savedSsids = nvs_entry_find(ssidsNs, ssidsNs, NVS_TYPE_ANY);
 	if (!savedSsids) {
-		FactoryReset();
+		FactoryReset(false);
+
+		// Restore ap info from old firmware
+		const esp_partition_t* ssids_old = esp_partition_find_first(ESP_PARTITION_TYPE_DATA,
+			ESP_PARTITION_SUBTYPE_DATA_NVS, "ssids_old");
+
+		if (ssids_old) {
+			const size_t eepromSizeNeeded = (MaxRememberedNetworks + 1) * sizeof(WirelessConfigurationData);
+
+			uint8_t *buf = reinterpret_cast<uint8_t*>(malloc(eepromSizeNeeded));
+			memset(buf, 0xFF, eepromSizeNeeded);
+			esp_partition_read(ssids_old, 0, buf, eepromSizeNeeded);
+
+			WirelessConfigurationData *data = reinterpret_cast<WirelessConfigurationData*>(buf);
+			for(int i = 0; i <= MaxRememberedNetworks; i++) {
+				WirelessConfigurationData *d = &(data[i]);
+				if (d->ssid[0] != 0xFF) {
+					SetSsidData(i, *d, false);
+				}
+			}
+
+			free(buf);
+		}
+
+		nvs_commit(ssids);
 	}
 	nvs_release_iterator(savedSsids);
 
