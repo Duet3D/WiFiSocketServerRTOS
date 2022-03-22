@@ -265,13 +265,23 @@ pre(currentState == NetworkState::idle)
 		std::min(sizeof(wifi_config.sta.password), sizeof(apData.password)));
 	esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config);
 
-	if (apData.ip != 0) {
-		tcpip_adapter_dhcpc_stop(TCPIP_ADAPTER_IF_STA);
+	tcpip_adapter_dhcpc_stop(TCPIP_ADAPTER_IF_STA);
+
+	// On Arduino core, gateway and subnet is ignored
+	// if IP address is not specified.
+	if (apData.ip) {
 		tcpip_adapter_ip_info_t ip_info;
 		ip_info.ip.addr = apData.ip;
 		ip_info.gw.addr = apData.gateway;
-		ip_info.netmask.addr = apData.netmask;
+
+		if(!apData.netmask) {
+			IP4_ADDR(&ip_info.netmask, 255,255,255,0); // default to 255.255.255.0
+		} else {
+			ip_info.netmask.addr = apData.netmask;
+		}
 		tcpip_adapter_set_ip_info(TCPIP_ADAPTER_IF_STA, &ip_info);
+	} else {
+		tcpip_adapter_dhcpc_start(TCPIP_ADAPTER_IF_STA);
 	}
 
 	tcpip_adapter_set_hostname(TCPIP_ADAPTER_IF_STA, webHostName);
@@ -637,7 +647,7 @@ void StartAccessPoint()
 
 				tcpip_adapter_ip_info_t ip_info;
 				ip_info.ip.addr = apData.ip;
-				ip_info.gw.addr = apData.gateway;
+				ip_info.gw.addr = apData.ip;
 				IP4_ADDR(&ip_info.netmask, 255,255,255,0);
 				res = tcpip_adapter_set_ip_info(TCPIP_ADAPTER_IF_AP, &ip_info);
 
