@@ -139,9 +139,6 @@ const uint8_t protocolFtpData = 3;
 
 const size_t MaxCredentialChunkSize = MaxDataLength;
 
-const size_t MaxCertificateSize = 8192;
-const size_t MaxPrivateKeySize = 4096;
-
 // Message data sent from SAM to ESP to add an SSID or set the access point configuration. This is also the format of a remembered SSID entry.
 struct __attribute__((__packed__)) CredentialsInfo
 {
@@ -192,7 +189,8 @@ struct WirelessConfigurationData
 	union {
 		char password[PasswordLength];	// password for personal networks
 		struct {
-			uint8_t res[PasswordLength - (sizeof(EAPProtocol))];
+			CredentialsInfo credSizes;
+			uint8_t res[PasswordLength - (sizeof(EAPProtocol) + sizeof(CredentialsInfo))];
 			EAPProtocol protocol;	// null terminator if PSK
 		} eap;
 	};

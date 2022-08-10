@@ -1,2 +1,0 @@
-COMPONENT_SRCDIRS += FlashDB/src FlashDB/port/fal/src FlashDB/demos/esp32_spi_flash/components/FlashDB/porting
-COMPONENT_ADD_INCLUDEDIRS += config FlashDB/demos/esp32_spi_flash/components/FlashDB/inc FlashDB/inc FlashDB/port/fal/inc

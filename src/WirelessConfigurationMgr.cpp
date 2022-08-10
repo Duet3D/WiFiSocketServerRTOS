@@ -1,9 +1,11 @@
 #include "WirelessConfigurationMgr.h"
 
 #include <cstring>
+#include <sys/fcntl.h>
 
 #include "esp_system.h"
 #include "rom/ets_sys.h"
+#include "esp_spiffs.h"
 
 #include "Config.h"
 
@@ -12,26 +14,47 @@
 #endif
 
 WirelessConfigurationMgr* WirelessConfigurationMgr::instance = nullptr;
-SemaphoreHandle_t WirelessConfigurationMgr::kvsLock = nullptr;
 
 void WirelessConfigurationMgr::Init()
 {
-	InitKVS();
+	// This class manages two partitions: a credential scratch partition and
+	// the key-value storage (KVS) partition.
+	//
+	// The scratch partition is a raw partition that provides the required contiguous memory
+	// for enterprise network credentials. Credentials stored in the KVS are copied to this
+	// partition before being passed to ESP WPA2 enterprise APIs.
+	//
+	// The key-value storage partition uses SPIFFS. It is used to store wireless configuration data,
+	// the credentials, and some other bits and pieces. There are three main 'directories':
+	// 		- ssids - stores wireless configuration data, with key/path 'ssids/xx' where xx is the ssid slot
+	// 		- creds - stores credential for a particular wireless config data stored in 'ssids', with key/path
+	// 					'creds/xx/yy', where xx is the ssid slot, yy is the credential index
+	// 		- scratch - stores some values related to the scratch partition, with key/path 'scratch/ss' where
+	// 					ss is the string id
+	//
+	esp_vfs_spiffs_conf_t conf = {
+		.base_path = "/kvs",
+		.partition_label = NULL,
+		.max_files = 1,
+		.format_if_mount_failed = true
+	};
 
-	// Memory map the partition. The base pointer will be returned.
+	esp_vfs_spiffs_register(&conf);
+
+	// Memory map the partition, remembering the base pointer for the lifetime of the app.
 	spi_flash_mmap_handle_t mapHandle;
-	const esp_partition_t* scratch = GetScratchPartition();
-	esp_partition_mmap(scratch, 0, scratch->size, SPI_FLASH_MMAP_DATA, reinterpret_cast<const void**>(&scratchBase), &mapHandle);
+	scratchPartition = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_NVS, SCRATCH_NS);
+	esp_partition_mmap(scratchPartition, 0, scratchPartition->size, SPI_FLASH_MMAP_DATA,
+						reinterpret_cast<const void**>(&scratchBase), &mapHandle);
 
-	WirelessConfigurationData temp;
-
-	// Check if first time and the storage should be initialized
-	if (!GetKV(GetSsidKey(0), &temp, sizeof(temp)))
+	// Check if first time and the storage should be initialized. The marker here is SSID slot 0,
+	// since WirelessConfigurationMgr::Reset works it's way backwards to it.
+	if (!GetKV(GetSsidKey(0), nullptr, 0))
 	{
 		debugPrintf("initializing SSID storage...");
 		Reset();
 
-		// Restore SSID info from old firmware
+		// Restore SSID info from old, 1.x firmware, if the partition exists
 		const esp_partition_t* oldSsids = esp_partition_find_first(ESP_PARTITION_TYPE_DATA,
 			ESP_PARTITION_SUBTYPE_DATA_NVS, "ssids_old");
 
@@ -44,7 +67,7 @@ void WirelessConfigurationMgr::Init()
 			esp_partition_read(oldSsids, 0, buff, eepromSizeNeeded);
 
 			WirelessConfigurationData *data = reinterpret_cast<WirelessConfigurationData*>(buff);
-			for(int i = 0; i <= MaxRememberedNetworks; i++) {
+			for (int i = MaxRememberedNetworks; i >= 0; i--) {
 				WirelessConfigurationData *d = &(data[i]);
 				if (d->ssid[0] != 0xFF) {
 					SetSsidData(i, *d);
@@ -56,27 +79,13 @@ void WirelessConfigurationMgr::Init()
 		}
 	}
 
-	// Check that the scratch partition is ready for writing. All bytes after the current
-	// offset must be 0xFF.
-	uint32_t offset = 0;
-	GetKV(GetScratchKey(SCRATCH_OFFSET_ID), &offset, sizeof(offset));
-
-	for(const uint8_t* current = scratchBase + offset; current < scratchBase + scratch->size; current++)
+	// Storing an enterprise SSID and its credentials might not have
+	// gone all the way. Since credentials are stored first before the
+	// SSID data, if credentials are incompletely stored due to a power loss,
+	// we can detect and clean up those orphaned credentials here.
+	for (int i = MaxRememberedNetworks; i > 0; i--)
 	{
-		if (*current != 0xFF)
-		{
-			debugPrintf("scratch partition inconsistent at position %u, erasing...", current - scratchBase);
-			EraseScratch();
-			debugPrintf("done!\n", current - scratchBase);
-			break;
-		}
-	}
-
-	// Storing an enterprise SSID might not have gone all the way.
-	// The SSID information is written last, after all of the credentials;
-	// so there might be orphaned credentials taking up space. Clear them here.
-	for(int i = 1; i < MaxRememberedNetworks; i++)
-	{
+		WirelessConfigurationData temp;
 		if ((GetSsid(i, temp) && IsSsidBlank(temp)))
 		{
 			EraseCredentials(i);
@@ -86,30 +95,36 @@ void WirelessConfigurationMgr::Init()
 
 void WirelessConfigurationMgr::Reset()
 {
-	EraseScratch();
-
 	// Reset storage and reset values to default.
+	//  - clear the scratch partition, and the associated scratch
+	//		key-value pairs
 	// 	- the SSID slot must be reset to a blank value, and credentials for
 	// 		each slot must be cleared
-	//  - the scratch key-value storage namespace must be cleared
 	//
-	// Work down to SSID 0, since it is used to detect whether
+	// Work down to SSID slot 0, since it is used to detect whether
 	// the KVS has been initialized for the first time.
+	EraseScratch();
+
 	for (int i = MaxRememberedNetworks; i >= 0; i--)
 	{
-		EraseSsid(i); // this clears the associated credentials as well
+		// Erase the SSID first, then the credentials. This is because if
+		// erasure of credentials is incomplete, if the corresponding
+		// SSID has been cleared first, then it can be erased at startup
+		EraseSsid(i);
+		EraseCredential(i);
 	}
 }
 
 int WirelessConfigurationMgr::SetSsid(const WirelessConfigurationData& data, bool ap = false)
 {
-	WirelessConfigurationData d;
+	WirelessConfigurationData temp;
+	memset(&temp, 0, sizeof(temp));
 
 	int ssid = WirelessConfigurationMgr::AP;
 
 	if (!ap)
 	{
-		ssid = GetSsid(data.ssid, d);
+		ssid = GetSsid(data.ssid, temp);
 
 		if (ssid < 0)
 		{
@@ -122,7 +137,9 @@ int WirelessConfigurationMgr::SetSsid(const WirelessConfigurationData& data, boo
 
 	if (ssid >= 0)
 	{
-		if (EraseSsid(ssid))
+		// This might previously be an enterprise ssid, delete
+		// its credentials here.
+		if (temp.eap.protocol == EAPProtocol::NONE || (EraseSsid(ssid) && EraseCredential(ssid)))
 		{
 			if (SetSsidData(ssid, data))
 			{
@@ -138,25 +155,18 @@ int WirelessConfigurationMgr::SetSsid(const WirelessConfigurationData& data, boo
 
 bool WirelessConfigurationMgr::EraseSsid(int ssid)
 {
-	bool res = false;
-
 	if (ssid >= 0)
 	{
-		// Erase the SSID first, then the credentials.
-		// There are two reasons for this:
-		// 		- SSID is stored in one operation. If it is interrupted by power loss,
-		//			it is either still valid or erased at next reboot
-		//		- Credentials are stored in multiple chunks. If it is interrupted by power loss,
-		//			the SSID will have already been cleared and thus erasure will
-		//			continue at reboot inside WirelessConfigurationMgr::Init()
-		res = EraseSsidData(ssid);
-		if (res)
+		if (ResetIfCredentialsLoaded(ssid))
 		{
-			res = EraseCredentials(ssid);
+			if (EraseSsidData(ssid))
+			{
+				return true;
+			}
 		}
 	}
 
-	return res;
+	return false;
 }
 
 bool WirelessConfigurationMgr::EraseSsid(const char *ssid)
@@ -177,13 +187,16 @@ bool WirelessConfigurationMgr::GetSsid(int ssid, WirelessConfigurationData& data
 
 int WirelessConfigurationMgr::GetSsid(const char *ssid, WirelessConfigurationData& data)
 {
-	for (int i = MaxRememberedNetworks; i >= 0; i--)
+	if (ssid)
 	{
-		WirelessConfigurationData temp;
-		if (GetSsid(i, temp) && strncmp(ssid, temp.ssid, sizeof(temp.ssid)) == 0)
+		for (int i = MaxRememberedNetworks; i >= 0; i--)
 		{
-			data = temp;
-			return i;
+			WirelessConfigurationData temp;
+			if (GetSsid(i, temp) && strncmp(ssid, temp.ssid, sizeof(temp.ssid)) == 0)
+			{
+				data = temp;
+				return i;
+			}
 		}
 	}
 	return -1;
@@ -198,22 +211,22 @@ bool WirelessConfigurationMgr::BeginEnterpriseSsid(const WirelessConfigurationDa
 							password[sizeof(data.password) - sizeof(data.eap.protocol)]));
 
 	WirelessConfigurationData temp;
-	int newSsid = GetSsid(data.ssid, temp);
+	int ssid = GetSsid(data.ssid, temp);
 
-	if (newSsid < 0)
+	if (ssid < 0)
 	{
-		newSsid = FindEmptySsidEntry();
+		ssid = FindEmptySsidEntry();
 	}
 
-	if (newSsid > 0)
+	if (ssid > 0)
 	{
-		if (EraseSsid(newSsid))
+		if (EraseSsid(ssid))
 		{
 			pendingSsid = static_cast<PendingEnterpriseSsid*>(calloc(1, sizeof(PendingEnterpriseSsid)));
 			if (pendingSsid)
 			{
 				pendingSsid->data = data;
-				pendingSsid->ssid = newSsid;
+				pendingSsid->ssid = ssid;
 				return true;
 			}
 		}
@@ -228,16 +241,10 @@ bool WirelessConfigurationMgr::SetEnterpriseCredential(int cred, const void* buf
 	{
 		uint32_t *credsSizes = reinterpret_cast<uint32_t*>(&(pendingSsid->sizes));
 
-		// Update the size first, in case the credential store does not come through.
-		size_t oldSize = credsSizes[cred];
-		credsSizes[cred] += size;
-
-		if (SetCredentialSizes(pendingSsid->ssid, pendingSsid->sizes))
+		if(SetKV(GetCredentialKey(pendingSsid->ssid, cred), buff, size, credsSizes[cred]))
 		{
-			if (SetCredential(pendingSsid->ssid, cred, oldSize / MaxCredentialChunkSize, buff, size))
-			{
-				return true;
-			}
+			credsSizes[cred] += size;
+			return true;
 		}
 	}
 
@@ -246,32 +253,36 @@ bool WirelessConfigurationMgr::SetEnterpriseCredential(int cred, const void* buf
 
 bool WirelessConfigurationMgr::EndEnterpriseSsid(bool cancel = true)
 {
-	bool res = true;
+	bool ok = false;
 
 	if (pendingSsid)
 	{
 		if (!cancel)
 		{
-			res = SetCredentialSizes(pendingSsid->ssid, pendingSsid->sizes) &&
-				SetSsidData(pendingSsid->ssid, pendingSsid->data);
-		}
+			ok = SetSsidData(pendingSsid->ssid, pendingSsid->data);
 
-		if (cancel || !res)
+			if (ok)
+			{
+				ok = SetSsidData(pendingSsid->ssid, pendingSsid->data);
+			}
+			else
+			{
+				EraseCredential(pendingSsid->ssid);
+			}
+		}
+		else
 		{
-			// Delete the credentials written so far, since a reboot might
-			// be far off. This is a best-effort cleanup, so do not factor
-			// in the result.
-			EraseCredentials(pendingSsid->ssid);
+			ok = EraseCredentials(pendingSsid->ssid);
 		}
 
 		free(pendingSsid);
 		pendingSsid = nullptr;
 	}
 
-	return res;
+	return ok;
 }
 
-const uint8_t* WirelessConfigurationMgr::GetEnterpriseCredentials(int ssid, CredentialsInfo& sizes, CredentialsInfo& offsets)
+const uint8_t* WirelessConfigurationMgr::GetEnterpriseCredentials(int ssid, const CredentialsInfo& sizes, CredentialsInfo& offsets)
 {
 	const uint8_t *res = nullptr;
 
@@ -280,8 +291,7 @@ const uint8_t* WirelessConfigurationMgr::GetEnterpriseCredentials(int ssid, Cred
 	uint32_t loadedSsid = 0, baseOffset = 0;
 
 	if (GetKV(GetScratchKey(LOADED_SSID_ID), &loadedSsid, sizeof(loadedSsid)) &&
-		GetKV(GetScratchKey(SCRATCH_OFFSET_ID), &baseOffset, sizeof(baseOffset)) &&
-		GetCredentialSizes(ssid, sizes))
+		GetKV(GetScratchKey(SCRATCH_OFFSET_ID), &baseOffset, sizeof(baseOffset)))
 	{
 		// Get the total size of credentials
 		const uint32_t *sizesArr = reinterpret_cast<const uint32_t*>(&sizes);
@@ -291,82 +301,76 @@ const uint8_t* WirelessConfigurationMgr::GetEnterpriseCredentials(int ssid, Cred
 			totalSize += sizesArr[cred];
 		}
 
-		const esp_partition_t* scratch = GetScratchPartition();
-
-		if (scratch)
+		// If the SSID has already been loaded, just return the existing pointer
+		// and compute offsets. If not, load it in the scratch partition.
+		if (loadedSsid == ssid)
 		{
-			// If the SSID has already been loaded, just return the existing pointer
-			// and compute offsets. If not, load it in the scratch partition.
-			if (loadedSsid == ssid)
+			uint32_t *offsetsArr = reinterpret_cast<uint32_t*>(&offsets);
+
+			for(int cred = 0, offset = 0; cred < sizeof(offsets)/sizeof(offsetsArr[0]); cred++)
 			{
-				uint32_t *offsetsArr = reinterpret_cast<uint32_t*>(&offsets);
-
-				for(int cred = 0, offset = 0; cred < sizeof(offsets)/sizeof(offsetsArr[0]); cred++)
-				{
-					offsetsArr[cred] = offset;
-					offset += sizesArr[cred];
-				}
-
-				res = (scratchBase + baseOffset - totalSize);
+				offsetsArr[cred] = offset;
+				offset += sizesArr[cred];
 			}
-			else
-			{
-				bool ok = true;
 
-				// Increment the offset first. If it will not fit, start from the top
-				// again.
-				if (baseOffset + totalSize > scratch->size)
-				{
-					baseOffset = 0;
-					esp_err_t err = esp_partition_erase_range(scratch, baseOffset, scratch->size);
-					ok = (err == ESP_OK);
-				}
+			res = (scratchBase + baseOffset - totalSize);
+		}
+		else
+		{
+			bool ok = true;
+
+			// Increment the offset first. If it will not fit, start from the top
+			// again.
+			if (baseOffset + totalSize > scratchPartition->size)
+			{
+				baseOffset = 0;
+				esp_err_t err = esp_partition_erase_range(scratchPartition, baseOffset, scratchPartition->size);
+				ok = (err == ESP_OK);
+			}
+
+			if (ok)
+			{
+				uint32_t newOffset = baseOffset + totalSize;
+				ok = SetKV(GetScratchKey(SCRATCH_OFFSET_ID), &newOffset, sizeof(newOffset));
 
 				if (ok)
 				{
-					uint32_t newOffset = baseOffset + totalSize;
-					ok = SetKV(GetScratchKey(SCRATCH_OFFSET_ID), &newOffset, sizeof(newOffset));
+					// Store offsets from the base offset
+					uint32_t *offsetsArr = reinterpret_cast<uint32_t*>(&offsets);
+					uint8_t *buff = static_cast<uint8_t*>(malloc(MaxCredentialChunkSize));
+
+					for(int cred = 0, offset = 0; ok && cred < sizeof(offsets)/sizeof(offsetsArr[0]); cred++)
+					{
+						offsetsArr[cred] = offset;
+
+						for(int sz = 0, pos = 0, remain = sizesArr[cred];
+							ok && remain > 0; remain -= sz, offset += sz, pos += sz)
+						{
+							memset(buff, 0, MaxCredentialChunkSize);
+
+							sz = (remain >= MaxCredentialChunkSize) ? MaxCredentialChunkSize : remain;
+							if (GetKV(GetCredentialKey(ssid, cred), buff, sz, pos))
+							{
+								esp_err_t err = esp_partition_write(scratchPartition, baseOffset + offset, buff, sz);
+								ok = (err == ESP_OK);
+							}
+							else
+							{
+								ok = false;
+							}
+						}
+					}
+
+					free(buff);
 
 					if (ok)
 					{
-						// Store offsets from the base offset
-						uint32_t *offsetsArr = reinterpret_cast<uint32_t*>(&offsets);
-						uint8_t *buff = static_cast<uint8_t*>(malloc(MaxCredentialChunkSize));
-
-						for(int cred = 0, offset = 0; ok && cred < sizeof(offsets)/sizeof(offsetsArr[0]); cred++)
-						{
-							offsetsArr[cred] = offset;
-
-							for(int chunk = 0, sz = 0, remain = sizesArr[cred];
-								ok && remain > 0; chunk++, remain -= sz, offset += sz)
-							{
-								memset(buff, 0, MaxCredentialChunkSize);
-								sz = GetCredential(ssid, cred, chunk, buff,
-										remain >= MaxCredentialChunkSize ? MaxCredentialChunkSize : remain);
-
-								if (sz)
-								{
-									esp_err_t err = esp_partition_write(scratch, baseOffset + offset, buff, sz);
-									ok = (err == ESP_OK);
-								}
-								else
-								{
-									ok = false;
-								}
-							}
-						}
-
-						free(buff);
+						loadedSsid = ssid;
+						ok = SetKV(GetScratchKey(LOADED_SSID_ID), &loadedSsid, sizeof(loadedSsid));
 
 						if (ok)
 						{
-							loadedSsid = ssid;
-							ok = SetKV(GetScratchKey(LOADED_SSID_ID), &loadedSsid, sizeof(loadedSsid));
-
-							if (ok)
-							{
-								res = scratchBase + baseOffset;
-							}
+							res = scratchBase + baseOffset;
 						}
 					}
 				}
@@ -377,87 +381,75 @@ const uint8_t* WirelessConfigurationMgr::GetEnterpriseCredentials(int ssid, Cred
 	return res;
 }
 
-void WirelessConfigurationMgr::LockKVS(fdb_db_t db)
-{
-	xSemaphoreTake(kvsLock, portMAX_DELAY);
-}
-
-void WirelessConfigurationMgr::UnlockKVS(fdb_db_t db)
-{
-	xSemaphoreGive(kvsLock);
-}
-
-void WirelessConfigurationMgr::InitKVS()
-{
-	/**
-	 * This class manages two partitions: a credential scratch partition and
-	 * the key-value storage partition.
-	 *
-	 * The scratch partition is a raw partition that provides the required contiguous memory
-	 * for enterprise network credentials, which can get huge. These credentials are loaded and assembled
-	 * from the key-value store in a wear-leveled fashion.
-	 *
-	 * The key-value store uses FlashDB. They are used to store wireless configuration data,
-	 * the credential chunks, and some other bits and pieces. There are three 'namespaces':
-	 * 		- ssids - stores wireless configuration data, with keys 'ssids/xx' where xx is the ssid slot
-	 * 		- creds - stores credential for a particular wireless config data stored in 'ssids', with keys
-	 * 					'creds/xx/yy_zz', where xx is the ssid slot, yy is the credential index
-	 * 					and zz is the credential chunk
-	 * 		- scratch - stores some values related to the scratch partition, with keys 'scratch_ss' where
-	 * 					ss is the string id
-	 **/
-
-	kvsLock = xSemaphoreCreateCounting(1, 1);
-
-	fdb_kvdb_control(&kvs, FDB_KVDB_CTRL_SET_LOCK, reinterpret_cast<void*>(LockKVS));
-	fdb_kvdb_control(&kvs, FDB_KVDB_CTRL_SET_UNLOCK, reinterpret_cast<void*>(UnlockKVS));
-	fdb_kvdb_init(&kvs, "env", "fdb_kvdb1", NULL, NULL);
-}
-
 bool WirelessConfigurationMgr::DeleteKV(std::string key)
 {
-	fdb_err_t err = fdb_kv_del(&kvs, key.c_str());
-	return err == FDB_NO_ERR;
-}
+	std::string path = "/kvs/";
+	path.append(key);
 
-bool WirelessConfigurationMgr::SetKV(std::string key, const void *buff, size_t sz)
-{
-	if (buff && sz)
+	// Faster than actually deleting the file, for the cost
+	// of a few more bytes maintaing the empty file.
+	int f = open(path.c_str(), O_WRONLY | O_TRUNC | O_CREAT);
+
+	if (f >= 0)
 	{
-		struct fdb_blob blob = {
-			const_cast<void*>(buff), // buf
-			sz, // size
-			0, 0, 0 // saved
-		};
-
-		fdb_err_t err = fdb_kv_set_blob(&kvs, key.c_str(), &blob);
-		return err == FDB_NO_ERR;
+		close(f);
+		return true;
 	}
 
 	return false;
 }
 
-bool WirelessConfigurationMgr::GetKV(std::string key, void* buff, size_t sz)
+bool WirelessConfigurationMgr::SetKV(std::string key, const void *buff, size_t sz, bool append)
 {
-	uint8_t temp;
-	struct fdb_blob blob = {
-		const_cast<void*>(buff), // buf
-		sz, // size
-		0, 0, 0 // saved
-	};
-
 	if (buff && sz)
 	{
-		blob.buf = buff;
-		blob.size = sz;
-	}
-	else
-	{
-		blob.buf = &temp;
-		blob.size = 1;
+		std::string path = "/kvs/";
+		errno = 0;
+		path.append(key);
+
+		int f = open(path.c_str(), O_WRONLY | (append ? O_APPEND : O_CREAT | O_TRUNC));
+
+		if (f >= 0)
+		{
+			size_t written = write(f, buff, sz);
+			close(f);
+			return written == sz;
+		}
 	}
 
-	return fdb_kv_get_blob(&kvs, key.c_str(), &blob) >= sz && blob.saved.len;
+	return false;
+}
+
+bool WirelessConfigurationMgr::GetKV(std::string key, void* buff, size_t sz, size_t pos)
+{
+	std::string path = "/kvs/";
+	errno = 0;
+	path.append(key);
+
+	int f = open(path.c_str(), O_RDONLY);
+
+	if (f >= 0)
+	{
+		bool res = true;
+
+		// If buff == NULL or sz == 0, this command is only used to check
+		// if the particular key exists. Therefore, do nothing
+		// but close the opened file.
+		if (buff && sz)
+		{
+			res = (lseek(f, pos, SEEK_SET) == pos);
+
+			if (res)
+			{
+				res = (read(f, buff, sz) == sz);
+			}
+		}
+
+		close(f);
+		return res;
+	}
+
+	return false;
 }
 
 std::string WirelessConfigurationMgr::GetSsidKey(int ssid)
@@ -485,12 +477,6 @@ bool WirelessConfigurationMgr::EraseSsidData(int ssid)
 	return SetSsidData(ssid, clean);
 }
 
-const esp_partition_t* WirelessConfigurationMgr::GetScratchPartition()
-{
-	const esp_partition_t* part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_NVS, SCRATCH_NS);
-	return part;
-}
-
 std::string WirelessConfigurationMgr::GetScratchKey(const char* name)
 {
 	std::string res = SCRATCH_NS;
@@ -501,112 +487,50 @@ std::string WirelessConfigurationMgr::GetScratchKey(const char* name)
 
 bool WirelessConfigurationMgr::EraseScratch()
 {
-	bool res = false;
-
-	// Erase the scratch partition first, then the scratch key-values.
+	// Erase the scratch partition first, then the scratch key-value pairs.
 	// The reason for this is that if the scratch partition is interrupted
 	// and does not reach the current offset, the memory from the current
 	// offset will still be valid to write to.
-	const esp_partition_t* scratch = GetScratchPartition();
-	if (scratch)
-	{
-		esp_err_t err = esp_partition_erase_range(scratch, 0, scratch->size);
+	esp_err_t err = esp_partition_erase_range(scratchPartition, 0, scratchPartition->size);
 
-		if (err == ESP_OK)
-		{
-			uint32_t zero = 0;
-			res = SetKV(GetScratchKey(LOADED_SSID_ID), &zero, sizeof(zero)) &&
-					SetKV(GetScratchKey(SCRATCH_OFFSET_ID), &zero, sizeof(zero));
-		}
+	if (err == ESP_OK)
+	{
+		uint32_t zero = 0;
+		return SetKV(GetScratchKey(LOADED_SSID_ID), &zero, sizeof(zero)) &&
+				SetKV(GetScratchKey(SCRATCH_OFFSET_ID), &zero, sizeof(zero));
 	}
 
-	return res;
+	return false;
 }
 
-std::string WirelessConfigurationMgr::GetCredentialKey(int ssid, int cred, int chunk = 0)
+std::string WirelessConfigurationMgr::GetCredentialKey(int ssid, int cred)
 {
 	std::string res = CREDS_NS;
 	res.append("/");
 	res.append(std::to_string(ssid));
 	res.append("/");
 	res.append(std::to_string(cred));
-	res.append("/");
-	res.append(std::to_string(chunk));
 	return res;
-}
-
-bool WirelessConfigurationMgr::SetCredential(int ssid, int cred, int chunk, const void* buff, size_t sz)
-{
-	return ResetIfCredentialsLoaded(ssid) && SetKV(GetCredentialKey(ssid, cred, chunk), buff, sz);
-}
-
-size_t WirelessConfigurationMgr::GetCredential(int ssid, int cred, int chunk, void* buff, size_t sz)
-{
-	return GetKV(GetCredentialKey(ssid, cred, chunk), buff, sz) ? sz : 0;
-}
-
-bool WirelessConfigurationMgr::DeleteCredential(int ssid, int cred, int chunk)
-{
-	return DeleteKV(GetCredentialKey(ssid, cred, chunk));
-}
-
-bool WirelessConfigurationMgr::SetCredentialSizes(int ssid, const CredentialsInfo& sizes)
-{
-	return SetKV(GetCredentialKey(ssid, CREDS_SIZES_IDX), &sizes, sizeof(sizes));
-}
-
-bool WirelessConfigurationMgr::GetCredentialSizes(int ssid, CredentialsInfo& sizes)
-{
-	return GetKV(GetCredentialKey(ssid, CREDS_SIZES_IDX), &sizes, sizeof(sizes));
-}
-
-bool WirelessConfigurationMgr::DeleteCredentialSizes(int ssid)
-{
-	return DeleteKV(GetCredentialKey(ssid, CREDS_SIZES_IDX));
 }
 
 bool WirelessConfigurationMgr::EraseCredentials(int ssid)
 {
-	CredentialsInfo sizes;
-
 	bool res = true;
 
-	// Check first if the credential sizes exist, which is stored/updated
-	// before writing any credential.
-	if (GetCredentialSizes(ssid, sizes))
+	if (cred >= 0 && cred < sizeof(CredentialsInfo) / sizeof(uint32_t))
 	{
-		res = ResetIfCredentialsLoaded(ssid);
-
-		if (res)
+		res = DeleteKV(GetCredentialKey(ssid, cred));
+	}
+	else if (cred < 0)
+	{
+		for(int cred = sizeof(CredentialsInfo) / sizeof(uint32_t) - 1; res && cred >= 0; cred--)
 		{
-			const uint32_t *sizesArr = reinterpret_cast<const uint32_t*>(&sizes);
-
-			for(int cred = 0; res && cred < sizeof(CredentialsInfo)/ sizeof(sizesArr[0]); cred++)
-			{
-				int chunks = (sizesArr[cred] + (MaxCredentialChunkSize - 1)) / MaxCredentialChunkSize;
-
-				// Find the first chunk not yet deleted and start from there.
-				int chunk  = chunks - 1;
-				for(; chunk >= 0; chunk--)
-				{
-					if (GetKV(GetCredentialKey(ssid, cred, chunk), nullptr, 0))
-					{
-						break;
-					}
-				}
-
-				for(; res && chunk >= 0; chunk--)
-				{
-					res = DeleteCredential(ssid, cred, chunk);
-				}
-			}
-
-			// Only delete the sizes chunk once all the chunks have been deleted
-			if (res)
-			{
-				res = DeleteCredentialSizes(ssid);
-			}
+			res = DeleteKV(GetCredentialKey(ssid, cred));
 		}
+	}
+	else
+	{
+		res = false;
 	}
 
 	return res;
@@ -621,14 +545,10 @@ bool WirelessConfigurationMgr::ResetIfCredentialsLoaded(int ssid)
 
 	if (res) // loadedSsid value has to be valid
 	{
-		if (loadedSsid == ssid)
+		if (loadedSsid == ssid) // if the ssid in question is not loaded, do nothing
 		{
 			loadedSsid = 0;
 			res = SetKV(GetScratchKey(LOADED_SSID_ID), &loadedSsid, sizeof(loadedSsid));
-		}
-		else
-		{
-			res = true;
 		}
 	}
 

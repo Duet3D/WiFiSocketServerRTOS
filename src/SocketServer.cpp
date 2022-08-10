@@ -993,7 +993,10 @@ void ProcessRequest()
 
 							if (protocol != EAPProtocol::EAP_TTLS_MSCHAPV2 &&
 								protocol != EAPProtocol::EAP_PEAP_MSCHAPV2
-								&& protocol != EAPProtocol::EAP_TLS)
+#if ESP32C3
+								&& protocol != EAPProtocol::EAP_TLS
+#endif
+								)
 							{
 								SendResponse(ResponseBadParameter);
 							}

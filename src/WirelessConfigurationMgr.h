@@ -18,10 +18,6 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "esp_partition.h"
-#include "nvs_flash.h"
-#include "nvs.h"
-
-#include "flashdb.h"
 
 class WirelessConfigurationMgr
 {
@@ -48,7 +44,7 @@ public:
 	bool BeginEnterpriseSsid(const WirelessConfigurationData &data);
 	bool SetEnterpriseCredential(int cred, const void* buff, size_t size);
 	bool EndEnterpriseSsid(bool cancel);
-	const uint8_t* GetEnterpriseCredentials(int ssid, CredentialsInfo& sizes, CredentialsInfo& offsets);
+	const uint8_t* GetEnterpriseCredentials(int ssid, const CredentialsInfo& sizes, CredentialsInfo& offsets);
 
 private:
 	static WirelessConfigurationMgr* instance;
@@ -70,35 +66,24 @@ private:
 		CredentialsInfo sizes;
 	};
 
+	const esp_partition_t* scratchPartition;
 	const uint8_t* scratchBase;
+
 	PendingEnterpriseSsid* pendingSsid;
 
-	struct fdb_kvdb kvs;
-	static SemaphoreHandle_t kvsLock;
-
-	void InitKVS();
-	static void LockKVS(fdb_db_t db);
-	static void UnlockKVS(fdb_db_t db);
 	bool DeleteKV(std::string key);
-	bool SetKV(std::string key, const void *buff, size_t sz);
-	bool GetKV(std::string key, void* buff, size_t sz);
+	bool SetKV(std::string key, const void *buff, size_t sz, bool append = false);
+	bool GetKV(std::string key, void* buff, size_t sz, size_t pos = 0);
 
 	std::string GetSsidKey(int ssid);
 	bool SetSsidData(int ssid, const WirelessConfigurationData& data);
 	bool EraseSsidData(int ssid);
 	bool EraseSsid(int ssid);
 
-	const esp_partition_t* GetScratchPartition();
 	std::string GetScratchKey(const char* name);
 	bool EraseScratch();
 
-	std::string GetCredentialKey(int ssid, int cred, int chunk);
-	bool SetCredential(int ssid, int cred, int chunk, const void* buff, size_t sz);
-	size_t GetCredential(int ssid, int cred, int chunk, void* buff, size_t sz);
-	bool DeleteCredential(int ssid, int cred, int chunk);
-	bool SetCredentialSizes(int ssid, const CredentialsInfo& sizes);
-	bool GetCredentialSizes(int ssid, CredentialsInfo& sizes);
-	bool DeleteCredentialSizes(int ssid);
+	std::string GetCredentialKey(int ssid, int cred);
 	bool EraseCredentials(int ssid);
 	bool ResetIfCredentialsLoaded(int ssid);
 
