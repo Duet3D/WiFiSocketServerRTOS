@@ -74,6 +74,7 @@ private:
 	bool DeleteKV(std::string key);
 	bool SetKV(std::string key, const void *buff, size_t sz, bool append = false);
 	bool GetKV(std::string key, void* buff, size_t sz, size_t pos = 0);
+	size_t FreeKV();
 
 	std::string GetSsidKey(int ssid);
 	bool SetSsidData(int ssid, const WirelessConfigurationData& data);
@@ -84,7 +85,7 @@ private:
 	bool EraseScratch();
 
 	std::string GetCredentialKey(int ssid, int cred);
-	bool EraseCredentials(int ssid);
+	bool EraseCredential(int ssid, int cred = -1);
 	bool ResetIfCredentialsLoaded(int ssid);
 
 	int FindEmptySsidEntry();

@@ -88,7 +88,7 @@ void WirelessConfigurationMgr::Init()
 		WirelessConfigurationData temp;
 		if ((GetSsid(i, temp) && IsSsidBlank(temp)))
 		{
-			EraseCredentials(i);
+			EraseCredential(i);
 		}
 	}
 }
@@ -210,24 +210,36 @@ bool WirelessConfigurationMgr::BeginEnterpriseSsid(const WirelessConfigurationDa
 					offsetof(WirelessConfigurationData,
 							password[sizeof(data.password) - sizeof(data.eap.protocol)]));
 
-	WirelessConfigurationData temp;
-	int ssid = GetSsid(data.ssid, temp);
+	// Check if the credentials will fit
+	size_t total = 0;
+	const uint32_t *credsSizes = reinterpret_cast<const uint32_t*>(&(data.eap.credSizes));
 
-	if (ssid < 0)
+	for(int cred = 0; cred < sizeof(CredentialsInfo)/sizeof(uint32_t); cred++)
 	{
-		ssid = FindEmptySsidEntry();
+		total += credsSizes[cred];
 	}
 
-	if (ssid > 0)
+	if (total <= FreeKV() && total <= scratchPartition->size)
 	{
-		if (EraseSsid(ssid))
+		WirelessConfigurationData temp;
+		int ssid = GetSsid(data.ssid, temp);
+
+		if (ssid < 0)
 		{
-			pendingSsid = static_cast<PendingEnterpriseSsid*>(calloc(1, sizeof(PendingEnterpriseSsid)));
-			if (pendingSsid)
+			ssid = FindEmptySsidEntry();
+		}
+
+		if (ssid > 0)
+		{
+			if (EraseSsid(ssid))
 			{
-				pendingSsid->data = data;
-				pendingSsid->ssid = ssid;
-				return true;
+				pendingSsid = static_cast<PendingEnterpriseSsid*>(calloc(1, sizeof(PendingEnterpriseSsid)));
+				if (pendingSsid)
+				{
+					pendingSsid->data = data;
+					pendingSsid->ssid = ssid;
+					return true;
+				}
 			}
 		}
 	}
@@ -240,11 +252,17 @@ bool WirelessConfigurationMgr::SetEnterpriseCredential(int cred, const void* buf
 	if (pendingSsid)
 	{
 		uint32_t *credsSizes = reinterpret_cast<uint32_t*>(&(pendingSsid->sizes));
+		uint32_t *pendingSizes = reinterpret_cast<uint32_t*>(&(pendingSsid->data.eap.credSizes));
 
-		if(SetKV(GetCredentialKey(pendingSsid->ssid, cred), buff, size, credsSizes[cred]))
+		size_t newSize = credsSizes[cred] + size;
+
+		if (newSize <= pendingSizes[cred])
 		{
-			credsSizes[cred] += size;
-			return true;
+			if(SetKV(GetCredentialKey(pendingSsid->ssid, cred), buff, size, credsSizes[cred]))
+			{
+				credsSizes[cred] = newSize;
+				return true;
+			}
 		}
 	}
 
@@ -259,7 +277,22 @@ bool WirelessConfigurationMgr::EndEnterpriseSsid(bool cancel = true)
 	{
 		if (!cancel)
 		{
-			ok = SetSsidData(pendingSsid->ssid, pendingSsid->data);
+			// Make sure that the sizes sent at the beginning matches
+			// what we have received.
+			uint32_t *credsSizes = reinterpret_cast<uint32_t*>(&(pendingSsid->sizes));
+			uint32_t *pendingSizes = reinterpret_cast<uint32_t*>(&(pendingSsid->data.eap.credSizes));
+
+			ok = true;
+
+			for(int cred = 0; ok && cred < sizeof(CredentialsInfo) / sizeof(uint32_t); cred++)
+			{
+				ok = ((pendingSizes[cred] == credsSizes[cred]));
+
+				if (ok && !credsSizes[cred])
+				{
+					ok = EraseCredential(pendingSsid->ssid, cred);
+				}
+			}
 
 			if (ok)
 			{
@@ -272,7 +305,7 @@ bool WirelessConfigurationMgr::EndEnterpriseSsid(bool cancel = true)
 		}
 		else
 		{
-			ok = EraseCredentials(pendingSsid->ssid);
+			ok = EraseCredential(pendingSsid->ssid);
 		}
 
 		free(pendingSsid);
@@ -452,6 +485,13 @@ bool WirelessConfigurationMgr::GetKV(std::string key, void* buff, size_t sz, siz
 	return false;
 }
 
+size_t WirelessConfigurationMgr::FreeKV()
+{
+	size_t total = 0, used = 0;
+	esp_err_t ret = esp_spiffs_info(NULL, &total, &used);
+	return (ret == ESP_OK && used < total) ? total - used : 0;
+}
+
 std::string WirelessConfigurationMgr::GetSsidKey(int ssid)
 {
 	std::string res = SSIDS_NS;
@@ -513,7 +553,7 @@ std::string WirelessConfigurationMgr::GetCredentialKey(int ssid, int cred)
 	return res;
 }
 
-bool WirelessConfigurationMgr::EraseCredentials(int ssid)
+bool WirelessConfigurationMgr::EraseCredential(int ssid, int cred)
 {
 	bool res = true;
 

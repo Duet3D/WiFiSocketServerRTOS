@@ -516,7 +516,7 @@ pre(currentState == WiFiState::idle)
 	if (wp.eap.protocol != EAPProtocol::NONE)
 	{
 		CredentialsInfo offsets;
-		CredentialsInfo sizes;
+		CredentialsInfo &sizes = wp.eap.credSizes;
 
 		const uint8_t* base = wirelessConfigMgr->GetEnterpriseCredentials(currentSsid, sizes, offsets);
 
@@ -987,7 +987,7 @@ void ProcessRequest()
 				{
 					if (!pending)
 					{
-						if (messageHeaderIn.hdr.dataLength == ReducedWirelessConfigurationDataSize)
+						if (messageHeaderIn.hdr.dataLength == sizeof(WirelessConfigurationData))
 						{
 							EAPProtocol protocol = static_cast<EAPProtocol>(messageHeaderIn.hdr.socketNumber);
 
