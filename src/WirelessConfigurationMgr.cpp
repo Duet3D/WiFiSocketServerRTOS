@@ -15,6 +15,21 @@
 
 WirelessConfigurationMgr* WirelessConfigurationMgr::instance = nullptr;
 
+static uint32_t roundToSecSz(uint32_t val)
+{
+	static_assert(SPI_FLASH_SEC_SIZE && ((SPI_FLASH_SEC_SIZE & (SPI_FLASH_SEC_SIZE - 1)) == 0));
+	
+	// If val is already a multiple of SPI_FLASH_SEC_SIZE, return itself;
+	// else return next multiple.
+
+	uint32_t res = val;
+	if (val % SPI_FLASH_SEC_SIZE != 0)
+	{
+		res = (val + (SPI_FLASH_SEC_SIZE - 1)) & ~(SPI_FLASH_SEC_SIZE - 1);
+	}
+	return res;
+}
+
 void WirelessConfigurationMgr::Init()
 {
 	// This class manages two partitions: a credential scratch partition and
@@ -334,6 +349,9 @@ const uint8_t* WirelessConfigurationMgr::GetEnterpriseCredentials(int ssid, cons
 			totalSize += sizesArr[cred];
 		}
 
+		// Erasing the flash storage has to be in multiples of SPI_FLASH_SEC_SZ.
+		size_t actualSize = roundToSecSz(totalSize);
+
 		// If the SSID has already been loaded, just return the existing pointer
 		// and compute offsets. If not, load it in the scratch partition.
 		if (loadedSsid == ssid)
@@ -346,25 +364,21 @@ const uint8_t* WirelessConfigurationMgr::GetEnterpriseCredentials(int ssid, cons
 				offset += sizesArr[cred];
 			}
 
-			res = (scratchBase + baseOffset - totalSize);
+			res = (scratchBase + baseOffset - actualSize);
 		}
 		else
 		{
-			bool ok = true;
-
-			// Increment the offset first. If it will not fit, start from the top
-			// again.
-			if (baseOffset + totalSize > scratchPartition->size)
+			if (baseOffset + actualSize > scratchPartition->size)
 			{
 				baseOffset = 0;
-				esp_err_t err = esp_partition_erase_range(scratchPartition, baseOffset, scratchPartition->size);
-				ok = (err == ESP_OK);
 			}
+
+			uint32_t newOffset = baseOffset + actualSize;
+			bool ok = SetKV(GetScratchKey(SCRATCH_OFFSET_ID), &newOffset, sizeof(newOffset));
 
 			if (ok)
 			{
-				uint32_t newOffset = baseOffset + totalSize;
-				ok = SetKV(GetScratchKey(SCRATCH_OFFSET_ID), &newOffset, sizeof(newOffset));
+				ok = (esp_partition_erase_range(scratchPartition, baseOffset, actualSize) == ESP_OK);
 
 				if (ok)
 				{
