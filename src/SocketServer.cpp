@@ -512,7 +512,6 @@ pre(currentState == WiFiState::idle)
 
 	esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
 
-#if ESP32C3
 	if (wp.eap.protocol != EAPProtocol::NONE)
 	{
 		CredentialsInfo offsets;
@@ -568,7 +567,6 @@ pre(currentState == WiFiState::idle)
 
 		esp_wifi_sta_wpa2_ent_enable();
 	}
-#endif
 
 	tcpip_adapter_dhcpc_stop(TCPIP_ADAPTER_IF_STA);
 
@@ -977,7 +975,6 @@ void ProcessRequest()
 			}
 			break;
 
-#if ESP32C3
 		case NetworkCommand::networkAddEnterpriseSsid:		// add an enterprise access point
 			{
 				static bool pending = false;
@@ -1078,7 +1075,6 @@ void ProcessRequest()
 				}
 			}
 			break;
-#endif
 
 		case NetworkCommand::networkDeleteSsid:				// delete a network from our access point list
 			if (messageHeaderIn.hdr.dataLength == SsidLength)
