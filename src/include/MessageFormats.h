@@ -140,25 +140,28 @@ const uint8_t protocolFtpData = 3;
 const size_t MaxCredentialChunkSize = MaxDataLength;
 
 // Message data sent from SAM to ESP to add an SSID or set the access point configuration. This is also the format of a remembered SSID entry.
-struct __attribute__((__packed__)) CredentialsInfo
+union __attribute__((__packed__)) CredentialsInfo
 {
-	uint32_t anonymousId;
-	uint32_t caCert;
-	union {
-		struct {
-			uint32_t identity;
-			uint32_t password;
-		} peapttls;
+	struct {
+		uint32_t anonymousId;
+		uint32_t caCert;
+		union {
+			struct {
+				uint32_t identity;
+				uint32_t password;
+			} peapttls;
 
-		struct {
-			uint32_t userCert;
-			uint32_t privateKey;
-			uint32_t privateKeyPswd;
-		} tls;
-	};
+			struct {
+				uint32_t userCert;
+				uint32_t privateKey;
+				uint32_t privateKeyPswd;
+			} tls;
+		};
+	} asMemb;
+	uint32_t asArr[(sizeof(asMemb) / sizeof(uint32_t))];
 };
 
-#define CredentialIndex(cred)	(offsetof(CredentialsInfo, cred)/ sizeof(uint32_t))
+#define CredentialIndex(cred)	(offsetof(CredentialsInfo, asMemb.cred)/ sizeof(uint32_t))
 
 enum class EAPProtocol : uint8_t
 {

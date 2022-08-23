@@ -1,5 +1,6 @@
 #include "WirelessConfigurationMgr.h"
 
+#include <array>
 #include <cstring>
 #include <sys/fcntl.h>
 
@@ -15,7 +16,7 @@
 
 WirelessConfigurationMgr* WirelessConfigurationMgr::instance = nullptr;
 
-static uint32_t roundToSecSz(uint32_t val)
+static uint32_t round2SecSz(uint32_t val)
 {
 	static_assert(SPI_FLASH_SEC_SIZE && ((SPI_FLASH_SEC_SIZE & (SPI_FLASH_SEC_SIZE - 1)) == 0));
 	
@@ -227,11 +228,10 @@ bool WirelessConfigurationMgr::BeginEnterpriseSsid(const WirelessConfigurationDa
 
 	// Check if the credentials will fit
 	size_t total = 0;
-	const uint32_t *credsSizes = reinterpret_cast<const uint32_t*>(&(data.eap.credSizes));
 
-	for(int cred = 0; cred < sizeof(CredentialsInfo)/sizeof(uint32_t); cred++)
+	for(uint32_t sz : data.eap.credSizes.asArr)
 	{
-		total += credsSizes[cred];
+		total += sz;
 	}
 
 	if (total <= FreeKV() && total <= scratchPartition->size)
@@ -266,16 +266,13 @@ bool WirelessConfigurationMgr::SetEnterpriseCredential(int cred, const void* buf
 {
 	if (pendingSsid)
 	{
-		uint32_t *credsSizes = reinterpret_cast<uint32_t*>(&(pendingSsid->sizes));
-		uint32_t *pendingSizes = reinterpret_cast<uint32_t*>(&(pendingSsid->data.eap.credSizes));
+		size_t newSize = pendingSsid->sizes.asArr[cred] + size;
 
-		size_t newSize = credsSizes[cred] + size;
-
-		if (newSize <= pendingSizes[cred])
+		if (newSize <= pendingSsid->data.eap.credSizes.asArr[cred])
 		{
-			if(SetKV(GetCredentialKey(pendingSsid->ssid, cred), buff, size, credsSizes[cred]))
+			if(SetKV(GetCredentialKey(pendingSsid->ssid, cred), buff, size, pendingSsid->sizes.asArr[cred]))
 			{
-				credsSizes[cred] = newSize;
+				pendingSsid->sizes.asArr[cred] = newSize;
 				return true;
 			}
 		}
@@ -294,16 +291,13 @@ bool WirelessConfigurationMgr::EndEnterpriseSsid(bool cancel = true)
 		{
 			// Make sure that the sizes sent at the beginning matches
 			// what we have received.
-			uint32_t *credsSizes = reinterpret_cast<uint32_t*>(&(pendingSsid->sizes));
-			uint32_t *pendingSizes = reinterpret_cast<uint32_t*>(&(pendingSsid->data.eap.credSizes));
-
 			ok = true;
 
 			for(int cred = 0; ok && cred < sizeof(CredentialsInfo) / sizeof(uint32_t); cred++)
 			{
-				ok = ((pendingSizes[cred] == credsSizes[cred]));
+				ok = ((pendingSsid->data.eap.credSizes.asArr[cred] == pendingSsid->sizes.asArr[cred]));
 
-				if (ok && !credsSizes[cred])
+				if (ok && !pendingSsid->sizes.asArr[cred])
 				{
 					ok = EraseCredential(pendingSsid->ssid, cred);
 				}
@@ -342,26 +336,24 @@ const uint8_t* WirelessConfigurationMgr::GetEnterpriseCredentials(int ssid, cons
 		GetKV(GetScratchKey(SCRATCH_OFFSET_ID), &baseOffset, sizeof(baseOffset)))
 	{
 		// Get the total size of credentials
-		const uint32_t *sizesArr = reinterpret_cast<const uint32_t*>(&sizes);
 		size_t totalSize = 0;
-		for(int cred = 0; cred < sizeof(sizes)/sizeof(sizesArr[0]); cred++)
+
+		for (uint32_t sz: sizes.asArr)
 		{
-			totalSize += sizesArr[cred];
+			totalSize += sz;
 		}
 
 		// Erasing the flash storage has to be in multiples of SPI_FLASH_SEC_SZ.
-		size_t actualSize = roundToSecSz(totalSize);
+		size_t actualSize = round2SecSz(totalSize);
 
 		// If the SSID has already been loaded, just return the existing pointer
-		// and compute offsets. If not, load it in the scratch partition.
+		// and compute offsets.asMemb. If not, load it in the scratch partition.
 		if (loadedSsid == ssid)
 		{
-			uint32_t *offsetsArr = reinterpret_cast<uint32_t*>(&offsets);
-
-			for(int cred = 0, offset = 0; cred < sizeof(offsets)/sizeof(offsetsArr[0]); cred++)
+			for(int cred = 0, offset = 0; cred < ARRAY_SIZE(offsets.asArr); cred++)
 			{
-				offsetsArr[cred] = offset;
-				offset += sizesArr[cred];
+				offsets.asArr[cred] = offset;
+				offset += sizes.asArr[cred];
 			}
 
 			res = (scratchBase + baseOffset - actualSize);
@@ -390,7 +382,7 @@ const uint8_t* WirelessConfigurationMgr::GetEnterpriseCredentials(int ssid, cons
 					{
 						offsetsArr[cred] = offset;
 
-						for(int sz = 0, pos = 0, remain = sizesArr[cred];
+						for(int sz = 0, pos = 0, remain = sizes.asArr[cred];
 							ok && remain > 0; remain -= sz, offset += sz, pos += sz)
 						{
 							memset(buff, 0, MaxCredentialChunkSize);

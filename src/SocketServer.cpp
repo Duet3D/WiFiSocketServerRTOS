@@ -536,32 +536,32 @@ pre(currentState == WiFiState::idle)
 		esp_wifi_sta_wpa2_ent_clear_username();
 		esp_wifi_sta_wpa2_ent_clear_password();
 
-		if (sizes.anonymousId)
+		if (sizes.asMemb.anonymousId)
 		{
-			esp_wifi_sta_wpa2_ent_set_identity(base + offsets.anonymousId, sizes.anonymousId);
+			esp_wifi_sta_wpa2_ent_set_identity(base + offsets.asMemb.anonymousId, sizes.asMemb.anonymousId);
 		}
 
-		if (sizes.caCert)
+		if (sizes.asMemb.caCert)
 		{
-			esp_wifi_sta_wpa2_ent_set_ca_cert(base + offsets.caCert, sizes.caCert);
+			esp_wifi_sta_wpa2_ent_set_ca_cert(base + offsets.asMemb.caCert, sizes.asMemb.caCert);
 		}
 
 		if (wp.eap.protocol == EAPProtocol::EAP_TLS)
 		{
 			const uint8_t *privateKeyPswd = nullptr;
-			if (sizes.tls.privateKeyPswd)
+			if (sizes.asMemb.tls.privateKeyPswd)
 			{
-				privateKeyPswd = base + offsets.tls.privateKeyPswd;
+				privateKeyPswd = base + offsets.asMemb.tls.privateKeyPswd;
 			}
 
-			esp_wifi_sta_wpa2_ent_set_cert_key(base + offsets.tls.userCert, sizes.tls.userCert,
-											base + offsets.tls.privateKey, sizes.tls.privateKey,
-											privateKeyPswd, sizes.tls.privateKeyPswd);
+			esp_wifi_sta_wpa2_ent_set_cert_key(base + offsets.asMemb.tls.userCert, sizes.asMemb.tls.userCert,
+											base + offsets.asMemb.tls.privateKey, sizes.asMemb.tls.privateKey,
+											privateKeyPswd, sizes.asMemb.tls.privateKeyPswd);
 		}
 		else if (wp.eap.protocol == EAPProtocol::EAP_PEAP_MSCHAPV2 || wp.eap.protocol == EAPProtocol::EAP_TTLS_MSCHAPV2)
 		{
-			esp_wifi_sta_wpa2_ent_set_username(base + offsets.peapttls.identity, sizes.peapttls.identity);
-			esp_wifi_sta_wpa2_ent_set_password(base + offsets.peapttls.password, sizes.peapttls.password);
+			esp_wifi_sta_wpa2_ent_set_username(base + offsets.asMemb.peapttls.identity, sizes.asMemb.peapttls.identity);
+			esp_wifi_sta_wpa2_ent_set_password(base + offsets.asMemb.peapttls.password, sizes.asMemb.peapttls.password);
 		}
 
 #if ESP32C3
