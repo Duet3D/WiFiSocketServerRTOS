@@ -149,6 +149,9 @@ static void HandleWiFiEvent(void* arg, esp_event_base_t event_base,
 
 	if (event_base == WIFI_EVENT_EXT && event_id == WIFI_EVENT_STA_CONNECTING) {
 		wifiEvt = STATION_CONNECTING;
+	} else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
+		tcpip_adapter_set_hostname(TCPIP_ADAPTER_IF_STA, webHostName);
+		return;
 	} else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
 		wifi_event_sta_disconnected_t* disconnected = (wifi_event_sta_disconnected_t*) event_data;
 		switch (disconnected->reason) {
@@ -587,7 +590,6 @@ pre(currentState == WiFiState::idle)
 		tcpip_adapter_dhcpc_start(TCPIP_ADAPTER_IF_STA);
 	}
 
-	tcpip_adapter_set_hostname(TCPIP_ADAPTER_IF_STA, webHostName);
 
 	esp_wifi_start();
 
@@ -1574,6 +1576,7 @@ void setup()
 	esp_event_loop_create_default();
 
 	esp_event_handler_register(WIFI_EVENT_EXT, WIFI_EVENT_STA_CONNECTING, &HandleWiFiEvent, NULL);
+	esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_CONNECTED, &HandleWiFiEvent, NULL);
 	esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &HandleWiFiEvent, NULL);
 	esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_STOP, &HandleWiFiEvent, NULL);
 	esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &HandleWiFiEvent, NULL);
