@@ -76,6 +76,8 @@ const uint8_t Backlog = 8;
 
 #define ARRAY_SIZE(_x) (sizeof(_x)/sizeof((_x)[0]))
 
+#define DEBUG
+
 #ifdef DEBUG
 #include "rom/ets_sys.h"
 #define debugPrint(_str)			ets_printf("%s(%d): %s", __FILE__, __LINE__, _str)

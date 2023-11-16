@@ -303,6 +303,9 @@ static void HandleWiFiEvent(void* arg, esp_event_base_t event_base,
 		}
 		return; // do not send an event
 	}
+	else {
+		return;
+	}
 
 	xTaskNotify(connPollTaskHdl, wifiEvt, eSetValueWithOverwrite);
 }
@@ -1809,6 +1812,10 @@ void IRAM_ATTR TransferReadyIsr(void* p)
 
 void setup()
 {
+	esp_log_level_set("*", ESP_LOG_INFO);
+	esp_log_level_set("wifi", ESP_LOG_DEBUG);
+	esp_log_level_set("tcpip_adapter", ESP_LOG_DEBUG);
+
 	mainTaskHdl = xTaskGetCurrentTaskHandle();
 
 	// Setup Wi-Fi
@@ -1820,13 +1827,8 @@ void setup()
 	esp_event_loop_create_default();
 
 	esp_event_handler_register(WIFI_EVENT_EXT, WIFI_EVENT_STA_CONNECTING, &HandleWiFiEvent, NULL);
-	esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_CONNECTED, &HandleWiFiEvent, NULL);
-	esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &HandleWiFiEvent, NULL);
-	esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_STOP, &HandleWiFiEvent, NULL);
-	esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &HandleWiFiEvent, NULL);
-	esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_START, &HandleWiFiEvent, NULL);
-	esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_STOP, &HandleWiFiEvent, NULL);
-	esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_SCAN_DONE, &HandleWiFiEvent, NULL);
+	esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &HandleWiFiEvent, NULL);
+	esp_event_handler_register(IP_EVENT, ESP_EVENT_ANY_ID, &HandleWiFiEvent, NULL);
 
 	wirelessConfigMgr = WirelessConfigurationMgr::GetInstance();
 
@@ -1836,7 +1838,6 @@ void setup()
 
 	xTaskCreate(ConnectPoll, "connPoll", CONN_POLL_STACK, NULL, CONN_POLL_PRIO, &connPollTaskHdl);
 
-	esp_log_level_set("wifi", ESP_LOG_NONE);
 
 	wirelessConfigMgr->Init();
 
