@@ -334,7 +334,7 @@ void Connection::Report()
 
 /*static*/ void Connection::Init()
 {
-	connectionQueue = xQueueCreate(MaxConnections, sizeof(ConnectionEvent));
+	connectionQueue = xQueueCreate(MaxConnections * 3, sizeof(ConnectionEvent));
 	allocateMutex = xSemaphoreCreateMutex();
 	xTaskCreate(ConnectionTask, "conn", CONNECTION_TASK, NULL, CONNECTION_PRIO, NULL);
 
