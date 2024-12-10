@@ -1632,6 +1632,17 @@ void ProcessRequest()
 				ConnStatusResponse resp;
 				conn.GetStatus(resp);
 				Connection::GetSummarySocketStatus(resp.connectedSockets, resp.otherEndClosedSockets);
+
+				// Evaluate RSSI here, since the WiFi connection is managed here.
+				resp.rssi = INT8_MIN;
+				if (currentState == WiFiState::connected)
+				{
+					wifi_ap_record_t ap_info;
+					ap_info.rssi = 0;
+					esp_wifi_sta_get_ap_info(&ap_info);
+					resp.rssi = ap_info.rssi;
+				}
+
 				hspi.transferDwords(reinterpret_cast<const uint32_t *>(&resp), nullptr, NumDwords(sizeof(resp)));
 			}
 			else
