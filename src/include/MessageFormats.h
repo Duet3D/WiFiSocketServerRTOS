@@ -30,7 +30,7 @@ const uint8_t InvalidFormatVersion = 0xC9;				// must be different from any form
 const uint32_t AnyIp = 0;								// must be the same as AcceptAnyIp in NetworkDefs.h
 
 // Return a size rounded up to to a whole number of dwords
-static inline constexpr size_t NumDwords(size_t arg)
+static inline constexpr size_t NumDwords(size_t arg) noexcept
 {
 	return (arg + sizeof(uint32_t) - 1)/sizeof(uint32_t);
 }
