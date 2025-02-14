@@ -22,6 +22,7 @@ extern "C"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "freertos/task.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "esp_system.h"
@@ -32,6 +33,7 @@ extern "C"
 #include "mdns.h"
 #include "nvs_flash.h"
 #include "nvs.h"
+#include "esp_timer.h"
 
 #include "led_indicator.h"
 
@@ -96,7 +98,7 @@ static char webHostName[HostNameLength + 1] = "Duet-WiFi";
 
 #ifdef DEBUG2
 static NetworkCommand lastCommand = NetworkCommand::nullCommand;
-static uint32_t lastCommandTime = UINT32_MAX;
+static uint32_t commandsProcessed = 0;
 #endif
 
 static DNSServer dns;
@@ -177,9 +179,15 @@ static void StatePrintTask(void* data)
 {
 	while (true)
 	{
-		printf("========================================\n");
-		printf("last command: %d\n", static_cast<int>(lastCommand));
-		printf("========================================\n");
+		printf("----------------------diagnostics---------------------\n");
+		printf("last_network_command: %u\n", static_cast<uint32_t>(lastCommand));
+		printf("commands_processed: %u\n", commandsProcessed);
+		printf("uptime_ms: %lu\n", millis());
+		printf("os_ticks: %u\n", xTaskGetTickCount());
+		uint16_t connected, otherEndClosed;
+		Connection::GetSummarySocketStatus(connected, otherEndClosed);
+		printf("connected_sockets: %u other_end_closed_sockets: %u\n", connected, otherEndClosed);
+		printf("------------------------------------------------------\n");
 		vTaskDelay(pdMS_TO_TICKS(250));
 	}
 }
@@ -1003,9 +1011,7 @@ void ProcessRequest()
 	bool deferCommand = false;
 
 #ifdef DEBUG2
-	uint32_t commandStart = millis();
 	lastCommand = NetworkCommand::nullCommand;
-	lastCommandTime = UINT32_MAX;
 #endif
 
 	// Begin the transaction
@@ -1026,6 +1032,11 @@ void ProcessRequest()
 	else
 	{
 		const size_t dataBufferAvailable = std::min<size_t>(messageHeaderIn.hdr.dataBufferAvailable, MaxDataLength);
+
+#ifdef DEBUG2
+		lastCommand = messageHeaderIn.hdr.command;
+		commandsProcessed++;
+#endif
 
 		// See what command we have received and take appropriate action
 		switch (messageHeaderIn.hdr.command)
@@ -1732,10 +1743,6 @@ void ProcessRequest()
 
 	gpio_set_level(SamSSPin, 1);			// de-assert CS to SAM to end the transaction and tell SAM the transfer is complete
 	hspi.endTransaction();
-
-#ifdef DEBUG2
-	lastCommandTime = millis() - commandStart;
-#endif
 
 	// If we deferred the command until after sending the response (e.g. because it may take some time to execute), complete it now
 	if (deferCommand)
