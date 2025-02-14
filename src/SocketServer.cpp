@@ -181,12 +181,15 @@ static void StatePrintTask(void* data)
 	{
 		printf("----------------------diagnostics---------------------\n");
 		printf("last_network_command: %u\n", static_cast<uint32_t>(lastCommand));
-		printf("commands_processed: %u\n", commandsProcessed);
+		printf("network_commands_processed: %u\n", commandsProcessed);
 		printf("uptime_ms: %lu\n", millis());
 		printf("os_ticks: %u\n", xTaskGetTickCount());
+		printf("free_heap: %u\n", esp_get_free_heap_size());
+		printf("reset_reason: %u\n", esp_reset_reason());
 		uint16_t connected, otherEndClosed;
 		Connection::GetSummarySocketStatus(connected, otherEndClosed);
 		printf("connected_sockets: %u other_end_closed_sockets: %u\n", connected, otherEndClosed);
+		Connection::ReportConnections();
 		printf("------------------------------------------------------\n");
 		vTaskDelay(pdMS_TO_TICKS(250));
 	}
