@@ -3,6 +3,8 @@
 #ifndef CONFIG_H_INCLUDED
 #define CONFIG_H_INCLUDED
 
+#define DEBUG2
+
 #define VERSION_MAIN	"2.2.1"
 
 #ifdef DEBUG
@@ -87,6 +89,9 @@ const uint8_t Backlog = 8;
 #define TCP_LISTENER_PRIO						(ESP_TASK_TCPIP_PRIO)
 #define DNS_SERVER_PRIO							(ESP_TASK_MAIN_PRIO)
 
+#ifdef DEBUG2
+#define STATE_PRINT_STACK						(1024)
+#endif
 
 #ifdef ESP8266
 #define WIFI_CONNECTION_STACK					(1492)

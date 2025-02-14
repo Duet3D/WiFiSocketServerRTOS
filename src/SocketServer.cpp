@@ -94,6 +94,11 @@ static_assert(HostNameLength <= CONFIG_ESP_NETIF_HOSTNAME_MAX_LENGTH);
 #endif
 static char webHostName[HostNameLength + 1] = "Duet-WiFi";
 
+#ifdef DEBUG2
+static NetworkCommand lastCommand = NetworkCommand::nullCommand;
+static uint32_t lastCommandTime = UINT32_MAX;
+#endif
+
 static DNSServer dns;
 
 static volatile const char* lastError = nullptr;
@@ -166,6 +171,19 @@ bool ValidSocketNumber(uint8_t num)
 	lastError = "socket number out of range";
 	return false;
 }
+
+#ifdef DEBUG2
+static void StatePrintTask(void* data)
+{
+	while (true)
+	{
+		printf("========================================\n");
+		printf("last command: %d\n", static_cast<int>(lastCommand));
+		printf("========================================\n");
+		vTaskDelay(pdMS_TO_TICKS(250));
+	}
+}
+#endif
 
 static inline bool isFirstConnectWorkaround()
 {
@@ -984,6 +1002,12 @@ void ProcessRequest()
 	messageHeaderOut.hdr.state = currentState;
 	bool deferCommand = false;
 
+#ifdef DEBUG2
+	uint32_t commandStart = millis();
+	lastCommand = NetworkCommand::nullCommand;
+	lastCommandTime = UINT32_MAX;
+#endif
+
 	// Begin the transaction
 	gpio_set_level(SamSSPin, 0);		// assert CS to SAM
 	hspi.beginTransaction();
@@ -1654,6 +1678,7 @@ void ProcessRequest()
 		case NetworkCommand::diagnostics:					// print some debug info over the UART line
 			SendResponse(ResponseEmpty);
 			deferCommand = true;							// we need to send the diagnostics after we have sent the response, so the SAM is ready to receive them
+
 			break;
 
 		case NetworkCommand::networkSetTxPower:
@@ -1707,6 +1732,10 @@ void ProcessRequest()
 
 	gpio_set_level(SamSSPin, 1);			// de-assert CS to SAM to end the transaction and tell SAM the transfer is complete
 	hspi.endTransaction();
+
+#ifdef DEBUG2
+	lastCommandTime = millis() - commandStart;
+#endif
 
 	// If we deferred the command until after sending the response (e.g. because it may take some time to execute), complete it now
 	if (deferCommand)
@@ -1855,6 +1884,10 @@ void setup()
 	esp_wifi_init(&cfg);
 
 	xTaskCreate(WiFiConnectionTask, "wifiConnection", WIFI_CONNECTION_STACK, NULL, WIFI_CONNECTION_PRIO, &connPollTaskHdl);
+
+#ifdef DEBUG2
+	xTaskCreate(StatePrintTask, "statePrint", STATE_PRINT_STACK, NULL, tskIDLE_PRIORITY, NULL);
+#endif
 
 	esp_log_level_set("wifi", ESP_LOG_NONE);
 
