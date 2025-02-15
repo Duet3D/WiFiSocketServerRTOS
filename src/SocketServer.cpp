@@ -185,10 +185,28 @@ static void StatePrintTask(void* data)
 		printf("uptime_ms: %lu\n", millis());
 		printf("os_ticks: %u\n", xTaskGetTickCount());
 		printf("free_heap: %u\n", esp_get_free_heap_size());
-		printf("reset_reason: %u\n", esp_reset_reason());
+		printf("last_reset_reason: %u\n", esp_reset_reason());
+
+		printf("wifi_state: %u\n", static_cast<uint32_t>(currentState));
+
+		if (currentState == WiFiState::connected || currentState == WiFiState::runningAsAccessPoint)
+		{
+			tcpip_adapter_ip_info_t ip_info;
+			tcpip_adapter_get_ip_info(currentState == WiFiState::connected ? TCPIP_ADAPTER_IF_STA : TCPIP_ADAPTER_IF_AP, &ip_info);
+
+			uint8_t *ip = reinterpret_cast<uint8_t*>(&ip_info.ip.addr);
+			printf("ip_addr: %d.%d.%d.%d\n", ip[0], ip[1], ip[2], ip[3]);
+
+			ip = reinterpret_cast<uint8_t*>(&ip_info.netmask.addr);
+			printf("netmask: %d.%d.%d.%d\n", ip[0], ip[1], ip[2], ip[3]);
+
+			ip = reinterpret_cast<uint8_t*>(&ip_info.gw.addr);
+			printf("gateway: %d.%d.%d.%d\n", ip[0], ip[1], ip[2], ip[3]);
+		}
+
 		uint16_t connected, otherEndClosed;
 		Connection::GetSummarySocketStatus(connected, otherEndClosed);
-		printf("connected_sockets: %u other_end_closed_sockets: %u\n", connected, otherEndClosed);
+		printf("connected_sockets: 0x%x other_end_closed_sockets: 0x%x\n", connected, otherEndClosed);
 		Connection::ReportConnections();
 		printf("------------------------------------------------------\n");
 		vTaskDelay(pdMS_TO_TICKS(250));
