@@ -89,7 +89,7 @@ const uint8_t Backlog = 8;
 #define TCP_LISTENER_PRIO						(ESP_TASK_TCPIP_PRIO)
 #define DNS_SERVER_PRIO							(ESP_TASK_MAIN_PRIO)
 
-#ifdef DEBUG2
+#ifdef DEBUG
 #define STATE_PRINT_STACK						(1024)
 #endif
 

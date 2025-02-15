@@ -96,7 +96,7 @@ static_assert(HostNameLength <= CONFIG_ESP_NETIF_HOSTNAME_MAX_LENGTH);
 #endif
 static char webHostName[HostNameLength + 1] = "Duet-WiFi";
 
-#ifdef DEBUG2
+#ifdef DEBUG
 static NetworkCommand lastCommand = NetworkCommand::nullCommand;
 static uint32_t commandsProcessed = 0;
 #endif
@@ -174,7 +174,7 @@ bool ValidSocketNumber(uint8_t num)
 	return false;
 }
 
-#ifdef DEBUG2
+#ifdef DEBUG
 static void StatePrintTask(void* data)
 {
 	while (true)
@@ -1031,7 +1031,7 @@ void ProcessRequest()
 	messageHeaderOut.hdr.state = currentState;
 	bool deferCommand = false;
 
-#ifdef DEBUG2
+#ifdef DEBUG
 	lastCommand = NetworkCommand::nullCommand;
 #endif
 
@@ -1054,7 +1054,7 @@ void ProcessRequest()
 	{
 		const size_t dataBufferAvailable = std::min<size_t>(messageHeaderIn.hdr.dataBufferAvailable, MaxDataLength);
 
-#ifdef DEBUG2
+#ifdef DEBUG
 		lastCommand = messageHeaderIn.hdr.command;
 		commandsProcessed++;
 #endif
@@ -1913,7 +1913,7 @@ void setup()
 
 	xTaskCreate(WiFiConnectionTask, "wifiConnection", WIFI_CONNECTION_STACK, NULL, WIFI_CONNECTION_PRIO, &connPollTaskHdl);
 
-#ifdef DEBUG2
+#ifdef DEBUG
 	xTaskCreate(StatePrintTask, "statePrint", STATE_PRINT_STACK, NULL, tskIDLE_PRIORITY, NULL);
 #endif
 
