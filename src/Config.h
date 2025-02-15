@@ -3,7 +3,7 @@
 #ifndef CONFIG_H_INCLUDED
 #define CONFIG_H_INCLUDED
 
-#define DEBUG2
+#define DEBUG
 
 #define VERSION_MAIN	"2.2.1"
 
