@@ -86,6 +86,8 @@ static uint32_t numWifiReconnects = 0;
 static bool usingDhcpc = false;
 
 // Global data
+static size_t flashSize = 0;
+
 static tcpip_adapter_ip_info_t staIpInfo;
 static volatile int currentSsid = -1;
 
@@ -1110,13 +1112,8 @@ void ProcessRequest()
 				NetworkStatusResponse * const response = reinterpret_cast<NetworkStatusResponse*>(transferBuffer);
 				memset(response, 0, sizeof(*response));
 
-#if ESP8266
-				uint32_t flashId = spi_flash_get_id_raw(&g_rom_flashchip);
-				debugPrintf("flash id is: 0x%0x\n", flashId);
-				response->flashSize = 1u << ((flashId >> 16) & 0xFF);
-#else
-				esp_flash_get_physical_size(NULL, &(response->flashSize));
-#endif
+				response->flashSize = flashSize;
+
 				SafeStrncpy(response->versionText, firmwareVersion, sizeof(response->versionText));
 
 				switch (esp_reset_reason())
@@ -1886,6 +1883,14 @@ void IRAM_ATTR TransferReadyIsr(void* p)
 
 void setup()
 {
+#if ESP8266
+	uint32_t flashId = spi_flash_get_id_raw(&g_rom_flashchip);
+	debugPrintf("flash id is: 0x%0x\n", flashId);
+	flashSize = 1u << ((flashId >> 16) & 0xFF);
+#else
+	esp_flash_get_physical_size(NULL, &(flashSize));
+#endif
+
 	mainTaskHdl = xTaskGetCurrentTaskHandle();
 
 	// Setup Wi-Fi
