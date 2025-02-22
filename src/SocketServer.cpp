@@ -86,7 +86,7 @@ static uint32_t numWifiReconnects = 0;
 static bool usingDhcpc = false;
 
 // Global data
-static size_t flashSize = 0;
+static uint32_t flashSize = 0;
 
 static tcpip_adapter_ip_info_t staIpInfo;
 static volatile int currentSsid = -1;
