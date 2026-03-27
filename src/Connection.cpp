@@ -202,7 +202,7 @@ void Connection::Poll()
 		// The other end may have closed the connection with RST, which causes lwIP
 		// to free the PCB. Detect this and close immediately instead of waiting for
 		// the acknowledgement timer to expire.
-		if (!conn->pcb.tcp || !conn->pcb.tcp->unacked)
+		if (!conn->pcb.tcp || (!conn->pcb.tcp->unsent && !conn->pcb.tcp->unacked))
 		{
 			SetState(ConnState::closeReady);
 		}
