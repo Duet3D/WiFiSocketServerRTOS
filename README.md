@@ -4,9 +4,53 @@ Firmware for Espressif Wi-Fi modules on Duet boards. Based on [DuetWiFiSocketSer
 
 ## Build
 
-Building the project generates `DuetWiFiServer.bin` used for [`M997 S1`](https://duet3d.dozuki.com/Wiki/M997). ESP8266, ESP32, ESP32-S3 and ESP32-C3 are supported.
+Building the project generates `DuetWiFiServer.bin` or `DuetWiFiModule_*.bin` used for [`M997 S1`](https://docs.duet3d.com/User_manual/Reference/Gcodes/M997). ESP8266, ESP32, ESP32-S3 and ESP32-C3 are supported.
 
-### ESP8266
+### Makefile (recommended)
+
+The Makefile-based build handles all targets and SDK setup automatically. Prerequisites:
+
+1. Clone the SDKs as sibling directories:
+
+```console
+user@pc:/path/to$ git clone --branch dwss_support --recursive https://github.com/Duet3D/ESP8266_RTOS_SDK.git
+user@pc:/path/to$ git clone --branch dwss_support --recursive https://github.com/Duet3D/esp-idf.git
+```
+
+2. Run the install scripts in each SDK to set up toolchains and Python environments:
+
+```console
+user@pc:/path/to/ESP8266_RTOS_SDK$ ./install.sh
+user@pc:/path/to/esp-idf$ ./install.sh
+```
+
+3. Build:
+
+```console
+user@pc:/path/to/WiFiSocketServerRTOS$ make all
+```
+
+Available targets:
+
+| Target | Output |
+|--------|--------|
+| `make ESP8266` | `ESP8266/DuetWiFiServer.bin` |
+| `make ESP32` | `ESP32/DuetWiFiModule_32.bin` |
+| `make ESP32S3` | `ESP32S3/DuetWiFiModule_32S3.bin` |
+| `make ESP32C3` | `ESP32C3/DuetWiFiModule_32C3.bin` |
+| `make all` | Build all of the above |
+| `make clean` | Clean all build outputs |
+| `make clean-all` | Clean all build outputs and SDK build artifacts |
+
+Run `make help` for the full list of targets and options. Use `V=1` for verbose output.
+
+SDK paths default to `../ESP8266_RTOS_SDK` and `../esp-idf` and can be overridden:
+
+```console
+user@pc:/path/to/WiFiSocketServerRTOS$ make ESP32 ESP_IDF=/path/to/esp-idf
+```
+
+### ESP8266 (manual)
 
 #### **Terminal (Linux/macOS)**
 
@@ -35,7 +79,7 @@ user@pc:/path/to/ESP8266_RTOS_SDK$ . ./export.sh
 
 
 ```console
-user@pc:/path/to/WiFiSocketServerRTOS$ make
+user@pc:/path/to/WiFiSocketServerRTOS$ make -f Makefile.esp8266
 ```
 
 #### **Terminal (Windows)**
@@ -74,7 +118,7 @@ $ git clone --branch dwss_support --recursive https://github.com/Duet3D/ESP8266_
 
 ```console
 user@pc MINGW32 /path/to/WiFiSocketServerRTOS
-$ make
+$ make -f Makefile.esp8266
 ```
 
 
@@ -84,7 +128,7 @@ Follow the instructions for setting up the build environment with Eclipse on [Li
 
 Afterwards, import this project in the `Import New Project` step.
 
-### ESP32 / ESP32-S3 / ESP32-C3
+### ESP32 / ESP32-S3 / ESP32-C3 (manual)
 
 #### **Terminal (Windows/macOS/Linux)**
 

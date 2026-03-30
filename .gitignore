@@ -60,5 +60,11 @@ Bugs.txt
 build
 sdkconfig
 
+# Build output directories
+/ESP8266/
+/ESP32/
+/ESP32S3/
+/ESP32C3/
+
 # VSCode
 .vscode
