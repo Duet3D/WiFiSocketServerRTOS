@@ -10,21 +10,34 @@ Building the project generates `DuetWiFiServer.bin` or `DuetWiFiModule_*.bin` us
 
 The Makefile-based build handles all targets and SDK setup automatically. Prerequisites:
 
-1. Clone the SDKs as sibling directories:
+1. Install `virtualenv` for Python. On distributions that enforce [PEP 668](https://peps.python.org/pep-0668/) (Arch Linux, Fedora, etc.), this must be installed via the system package manager:
+
+```console
+# Arch Linux
+sudo pacman -S python-virtualenv
+
+# Debian/Ubuntu
+sudo apt install python3-virtualenv
+
+# Fedora
+sudo dnf install python3-virtualenv
+```
+
+2. Clone the SDKs as sibling directories:
 
 ```console
 user@pc:/path/to$ git clone --branch dwss_support --recursive https://github.com/Duet3D/ESP8266_RTOS_SDK.git
 user@pc:/path/to$ git clone --branch dwss_support --recursive https://github.com/Duet3D/esp-idf.git
 ```
 
-2. Run the install scripts in each SDK to set up toolchains and Python environments:
+3. Run the install scripts in each SDK to set up toolchains and Python environments:
 
 ```console
 user@pc:/path/to/ESP8266_RTOS_SDK$ ./install.sh
 user@pc:/path/to/esp-idf$ ./install.sh
 ```
 
-3. Build:
+4. Build:
 
 ```console
 user@pc:/path/to/WiFiSocketServerRTOS$ make all
