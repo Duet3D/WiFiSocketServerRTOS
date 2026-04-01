@@ -28,7 +28,6 @@ if args.build_system == "cmake":
 
     for b in bins:
         b["offset"] = int(b["offset"], 16)
-    bins.sort(key=lambda b: b["offset"])
 
 else:
     with open(os.path.join(args.build_dir, "flasher_args")) as flasher_args:
@@ -48,6 +47,8 @@ else:
 with open(args.output, 'wb') as imgfile:
     pos = 0
     img = b''
+
+    bins.sort(key=lambda b: b["offset"])
 
     for b in bins:
         fill = b["offset"] - pos
