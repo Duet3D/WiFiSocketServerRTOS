@@ -119,7 +119,7 @@ size_t Connection::Write(const uint8_t *data, size_t length, bool doPush, bool c
 
 	if (rc != ERR_OK)
 	{
-		if (rc == ERR_RST || rc == ERR_CLSD || rc == ERR_ABRT || rc == ERR_CONN)
+		if (rc == ERR_RST || rc == ERR_CLSD)
 		{
 			SetState(ConnState::otherEndClosed);
 		}
@@ -167,7 +167,7 @@ void Connection::Poll()
 			rc = netconn_recv_tcp_pbuf_flags(conn, &data, NETCONN_NOAUTORCVD);
 		}
 
-		if (rc != ERR_WOULDBLOCK && rc != ERR_TIMEOUT)
+		if (rc != ERR_WOULDBLOCK)
 		{
 			if (rc == ERR_RST || rc == ERR_CLSD || rc == ERR_CONN || rc == ERR_ABRT)
 			{
@@ -202,7 +202,7 @@ void Connection::Poll()
 		// The other end may have closed the connection with RST, which causes lwIP
 		// to free the PCB. Detect this and close immediately instead of waiting for
 		// the acknowledgement timer to expire.
-		if (!conn->pcb.tcp || (!conn->pcb.tcp->unsent && !conn->pcb.tcp->unacked))
+		if (!conn->pcb.tcp || !conn->pcb.tcp->unacked)
 		{
 			SetState(ConnState::closeReady);
 		}
