@@ -87,6 +87,11 @@ const uint8_t Backlog = 8;
 #define TCP_LISTENER_PRIO						(ESP_TASK_TCPIP_PRIO)
 #define DNS_SERVER_PRIO							(ESP_TASK_MAIN_PRIO)
 
+// Main-task watchdog timeout, used by both backends (ESP-IDF: hardware esp_task_wdt;
+// ESP8266: software heartbeat checked by xTimer). 30s sits well above any legitimate
+// blocking operation in the main loop (scan, stop, mDNS)
+#define MAIN_TASK_WDT_MS						(30000)
+
 #ifdef DEBUG
 #define STATE_PRINT_STACK						(1024)
 #endif

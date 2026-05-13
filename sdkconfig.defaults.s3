@@ -3,3 +3,10 @@ CONFIG_ESP32S3_INSTRUCTION_CACHE_LINE_32B=y
 CONFIG_ESP32S3_INSTRUCTION_CACHE_WRAP=y
 CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240=y
 CONFIG_ESP32S3_DEFAULT_CPU_FREQ_MHZ=240
+
+# Task watchdog: armed at runtime with main task as the only subscriber.
+# Idle-task subscription is disabled so a healthy idle task cannot mask a wedged main.
+CONFIG_ESP_TASK_WDT=y
+CONFIG_ESP_TASK_WDT_PANIC=y
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=n
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=n

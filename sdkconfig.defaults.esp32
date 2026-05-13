@@ -40,3 +40,10 @@ CONFIG_SPI_MASTER_IN_IRAM=y
 CONFIG_ESP_MAIN_TASK_AFFINITY_CPU1=y
 
 CONFIG_MDNS_TASK_AFFINITY_NO_AFFINITY=y
+
+# Task watchdog: armed at runtime with main task as the only subscriber.
+# Idle-task subscription is disabled so a healthy idle task cannot mask a wedged main.
+CONFIG_ESP_TASK_WDT=y
+CONFIG_ESP_TASK_WDT_PANIC=y
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=n
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=n
