@@ -1039,6 +1039,12 @@ WiFiAuth EspAuthModeToWiFiAuth(wifi_auth_mode_t authmode)
 // This is called when the SAM is asking to transfer data
 void ProcessRequest()
 {
+	// State for the multi-phase networkAddEnterpriseSsid command. Lives at function scope so
+	// both the in-transaction switch and the deferred switch can read/update it across
+	// successive SPI transactions
+	static bool enterpriseAddPending = false;
+	static int32_t enterpriseAddErr = ResponseEmpty;
+
 	// Set up our own headers
 	messageHeaderIn.hdr.formatVersion = InvalidFormatVersion;
 	messageHeaderOut.hdr.formatVersion = MyFormatVersion;
@@ -1283,17 +1289,9 @@ void ProcessRequest()
 		case NetworkCommand::networkConfigureAccessPoint:	// configure our own access point details
 			if (messageHeaderIn.hdr.dataLength == sizeof(WirelessConfigurationData))
 			{
+				deferCommand = true;
 				messageHeaderIn.hdr.param32 = hspi.transfer32(ResponseEmpty);
 				hspi.transferDwords(nullptr, transferBuffer, NumDwords(sizeof(WirelessConfigurationData)));
-				const WirelessConfigurationData *receivedClientData = reinterpret_cast<const WirelessConfigurationData *>(transferBuffer);
-
-				const int ssid = wirelessConfigMgr->SetSsid(*receivedClientData,
-							messageHeaderIn.hdr.command == NetworkCommand::networkConfigureAccessPoint);
-
-				if (ssid < 0)
-				{
-					lastError = "SSID table full";
-				}
 			}
 			else
 			{
@@ -1303,13 +1301,10 @@ void ProcessRequest()
 
 		case NetworkCommand::networkAddEnterpriseSsid:		// add an enterprise access point
 			{
-				static bool pending = false;
-				static int32_t addErr = false;
-
 				AddEnterpriseSsidFlag flag = static_cast<AddEnterpriseSsidFlag>(messageHeaderIn.hdr.flags);
 				if (flag == AddEnterpriseSsidFlag::SSID) // add ssid info
 				{
-					if (!pending)
+					if (!enterpriseAddPending)
 					{
 						if (messageHeaderIn.hdr.dataLength == sizeof(WirelessConfigurationData))
 						{
@@ -1323,20 +1318,11 @@ void ProcessRequest()
 								hspi.transferDwords(nullptr, transferBuffer, NumDwords(sizeof(WirelessConfigurationData)));
 								WirelessConfigurationData *newSsid = reinterpret_cast<WirelessConfigurationData*>(transferBuffer);
 								newSsid->eap.protocol = protocol;
-
-								if (wirelessConfigMgr->BeginEnterpriseSsid(*newSsid))
-								{
-									pending = true;
-								}
-								else
-								{
-									addErr = ResponseTooManySsids;
-									lastError = "SSID table full";
-								}
+								deferCommand = true;
 							}
 							else
 							{
-								addErr = ResponseBadParameter;
+								enterpriseAddErr = ResponseBadParameter;
 							}
 						}
 						else
@@ -1351,24 +1337,19 @@ void ProcessRequest()
 				}
 				else if (flag == AddEnterpriseSsidFlag::CREDENTIAL)
 				{
-					if (pending)
+					if (enterpriseAddPending)
 					{
 						messageHeaderIn.hdr.param32 = hspi.transfer32(ResponseEmpty);
 						memset(transferBuffer, 0, sizeof(transferBuffer));
 						hspi.transferDwords(nullptr, transferBuffer, NumDwords(messageHeaderIn.hdr.dataLength));
-
-						if (!wirelessConfigMgr->SetEnterpriseCredential(messageHeaderIn.hdr.param32,
-								transferBuffer, messageHeaderIn.hdr.dataLength))
-						{
-							pending = false;
-						}
+						deferCommand = true;
 					}
 					else
 					{
-						if (addErr)
+						if (enterpriseAddErr)
 						{
-							SendResponse(addErr);
-							addErr = ResponseEmpty;
+							SendResponse(enterpriseAddErr);
+							enterpriseAddErr = ResponseEmpty;
 						}
 						else
 						{
@@ -1380,23 +1361,17 @@ void ProcessRequest()
 				{
 					bool cancel = (flag == AddEnterpriseSsidFlag::CANCEL);
 
-					if (cancel || pending)
+					if (cancel || enterpriseAddPending)
 					{
 						messageHeaderIn.hdr.param32 = hspi.transfer32(ResponseEmpty);
-						bool ok = wirelessConfigMgr->EndEnterpriseSsid(flag == AddEnterpriseSsidFlag::CANCEL);
-						pending = false;
-
-						if (!ok || cancel)
-						{
-							lastError = "enterprise SSID not saved";
-						}
+						deferCommand = true;
 					}
 					else
 					{
-						if (addErr)
+						if (enterpriseAddErr)
 						{
-							SendResponse(addErr);
-							addErr = ResponseEmpty;
+							SendResponse(enterpriseAddErr);
+							enterpriseAddErr = ResponseEmpty;
 						}
 						else
 						{
@@ -1414,13 +1389,9 @@ void ProcessRequest()
 		case NetworkCommand::networkDeleteSsid:				// delete a network from our access point list
 			if (messageHeaderIn.hdr.dataLength == SsidLength)
 			{
+				deferCommand = true;
 				messageHeaderIn.hdr.param32 = hspi.transfer32(ResponseEmpty);
 				hspi.transferDwords(nullptr, transferBuffer, NumDwords(SsidLength));
-
-				if (!wirelessConfigMgr->EraseSsid(reinterpret_cast<const char*>(transferBuffer)))
-				{
-					lastError = "SSID not found";
-				}
 			}
 			else
 			{
@@ -1869,6 +1840,63 @@ void ProcessRequest()
 			// Reinitialize with new clock config
 			hspi.end();
 			hspi.InitMaster(SPI_MODE1, messageHeaderIn.hdr.param32, true);
+			break;
+
+		case NetworkCommand::networkAddSsid:				// add to our known access point list
+		case NetworkCommand::networkConfigureAccessPoint:	// configure our own access point details
+			{
+				const WirelessConfigurationData *receivedClientData = reinterpret_cast<const WirelessConfigurationData *>(transferBuffer);
+				const int ssid = wirelessConfigMgr->SetSsid(*receivedClientData,
+							messageHeaderIn.hdr.command == NetworkCommand::networkConfigureAccessPoint);
+				if (ssid < 0)
+				{
+					lastError = "SSID table full";
+				}
+			}
+			break;
+
+		case NetworkCommand::networkDeleteSsid:
+			if (!wirelessConfigMgr->EraseSsid(reinterpret_cast<const char*>(transferBuffer)))
+			{
+				lastError = "SSID not found";
+			}
+			break;
+
+		case NetworkCommand::networkAddEnterpriseSsid:
+			{
+				AddEnterpriseSsidFlag flag = static_cast<AddEnterpriseSsidFlag>(messageHeaderIn.hdr.flags);
+				if (flag == AddEnterpriseSsidFlag::SSID)
+				{
+					const WirelessConfigurationData *newSsid = reinterpret_cast<const WirelessConfigurationData *>(transferBuffer);
+					if (wirelessConfigMgr->BeginEnterpriseSsid(*newSsid))
+					{
+						enterpriseAddPending = true;
+					}
+					else
+					{
+						enterpriseAddErr = ResponseTooManySsids;
+						lastError = "SSID table full";
+					}
+				}
+				else if (flag == AddEnterpriseSsidFlag::CREDENTIAL)
+				{
+					if (!wirelessConfigMgr->SetEnterpriseCredential(messageHeaderIn.hdr.param32,
+							transferBuffer, messageHeaderIn.hdr.dataLength))
+					{
+						enterpriseAddPending = false;
+					}
+				}
+				else if (flag == AddEnterpriseSsidFlag::COMMIT || flag == AddEnterpriseSsidFlag::CANCEL)
+				{
+					const bool cancel = (flag == AddEnterpriseSsidFlag::CANCEL);
+					const bool ok = wirelessConfigMgr->EndEnterpriseSsid(cancel);
+					enterpriseAddPending = false;
+					if (!ok || cancel)
+					{
+						lastError = "enterprise SSID not saved";
+					}
+				}
+			}
 			break;
 
 		default:
