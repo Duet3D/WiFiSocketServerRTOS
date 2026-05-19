@@ -56,6 +56,8 @@ class DNSServer
     // stops the DNS server
     void stop();
 
+    TaskHandle_t GetTaskHandle() const { return taskHdl; }
+
   private:
 
     struct netconn* _udp;

@@ -15,9 +15,14 @@
 
 static_assert(MaxConnections < sizeof(uint32_t) * 8); // Limits the listen callback value notification
 
+#if SUPPORTS_TLS
+// While TLS handshakes are in progress the Listener task wakes on this interval to step them
+// rather than blocking on a listen notification
+constexpr TickType_t HandshakeStepInterval = 1;
+#endif
 
 
-bool Listener::Start(uint16_t port, uint32_t ip, int protocol, int maxConns)
+bool Listener::Start(uint16_t port, uint32_t ip, int protocol, int maxConns, bool tls)
 {
 	// See if we are already listing for this
 	for (Listener *listener : listeners)
@@ -84,6 +89,7 @@ bool Listener::Start(uint16_t port, uint32_t ip, int protocol, int maxConns)
 					listener->protocol = protocol;
 					listener->maxConnections = maxConns;
 					listener->conn = conn;
+					listener->tls = tls;
 					listeners[freeListener] = listener;
 
 					err_t rc = netconn_listen_with_backlog(conn, Backlog);
@@ -148,7 +154,8 @@ void Listener::Stop()
 	{
 		listeners[i] = nullptr;
 	}
-	xTaskCreate(ListenerTask, "tcpListener", TCP_LISTENER_STACK, NULL, TCP_LISTENER_PRIO, &listenTaskHandle);
+	xTaskCreatePinnedToCore(ListenerTask, "tcpListener", TCP_LISTENER_STACK, NULL,
+		TCP_LISTENER_PRIO, &listenTaskHandle, NET_TASK_CPU);
 }
 
 /*static*/ void Listener::Stop(uint16_t port)
@@ -208,10 +215,15 @@ void Listener::Notify()
 
 /*static*/ void Listener::ListenerTask(void* p)
 {
-	uint32_t flags = 0;
+	TickType_t waitTime = portMAX_DELAY;
 
-	while (xTaskNotifyWait(0, UINT_MAX, &flags, portMAX_DELAY) == pdTRUE) // should always be true
+	for (;;)
 	{
+		// A finite waitTime means TLS handshakes are in progress and must be stepped again soon, so
+		// a timeout here (xTaskNotifyWait returning pdFALSE, flags left at 0) is expected
+		uint32_t flags = 0;
+		xTaskNotifyWait(0, UINT_MAX, &flags, waitTime);
+
 		for (int i = 0; i < MaxConnections; i++)
 		{
 			Listener *listener = listeners[i];
@@ -255,6 +267,13 @@ void Listener::Notify()
 				}
 			}
 		}
+
+#if SUPPORTS_TLS
+		// Step any deferred TLS handshakes, interleaved with the accepts above so a slow or stalled
+		// client cannot block new connections. Keep waking on a short interval while a handshake is
+		// still running, otherwise block until the next listen notification
+		waitTime = Connection::PollHandshakes() ? HandshakeStepInterval : portMAX_DELAY;
+#endif
 	}
 }
 

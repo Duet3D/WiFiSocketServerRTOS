@@ -22,8 +22,17 @@
 #include "include/MessageFormats.h"			// for ConnState
 #include "Listener.h"
 
+#if SUPPORTS_TLS
+struct mbedtls_ssl_context;
+struct TlsBioState;
+#endif
+
 constexpr uint32_t MaxReadWriteTime = 2000;		// how long we wait for a write operation to complete before it is cancelled
 constexpr uint32_t MaxAckTime = 4000;			// how long we wait for a connection to acknowledge the remaining data before it is closed
+#if SUPPORTS_TLS
+constexpr size_t TlsPlaintextBufSize = 2048;	// per-connection plaintext staging buffer for decrypted TLS data
+constexpr uint32_t MaxHandshakeTime = 8000;		// upper bound on a deferred TLS handshake before the connection is dropped
+#endif
 
 class Connection
 {
@@ -79,12 +88,32 @@ private:
 	bool pendOtherEndClosed;	// indicates that the other end has closed the connection, but changing the state
 								// should wait after the data from this connection has all been read
 
+#if SUPPORTS_TLS
+	mbedtls_ssl_context *ssl;	// non-null when this connection is TLS-wrapped; replaces the pbuf chain
+	TlsBioState *tlsBio;		// BIO state (netconn + pending pbuf cursor) - referenced by ssl via mbedtls_ssl_set_bio
+	uint8_t *tlsPlain;			// decrypted plaintext staging buffer (TlsPlaintextBufSize bytes)
+	size_t tlsPlainHead;		// next byte to read from tlsPlain
+	size_t tlsPlainTail;		// next byte to fill in tlsPlain
+	uint32_t handshakeStart;	// millis() when the deferred TLS handshake began - see MaxHandshakeTime
+#endif
+
 	void Poll();
 	void SetState(ConnState st) { state = st; }
+	void InitConnection(Listener *listener, struct netconn *conn);
 	void Connected(Listener *listener, struct netconn *conn);
+	void TerminateLocked(bool external);
 	ConnState GetState() const { return state; }
 
+#if SUPPORTS_TLS
+	void FreeTls();
+	bool StepHandshake();
+	static bool PollHandshakes();
+#endif
+
 	static SemaphoreHandle_t allocateMutex;
+#if SUPPORTS_TLS
+	static SemaphoreHandle_t tlsHandshakeMutex;
+#endif
 	static Connection *connectionList[MaxConnections];
 
 	void FreePbuf();

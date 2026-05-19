@@ -21,7 +21,52 @@ CONFIG_ESP_PHY_CALIBRATION_AND_DATA_STORAGE=n
 
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
 CONFIG_MBEDTLS_DYNAMIC_FREE_PEER_CERT=y
-CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y
+# Do NOT enable CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA. That option frees the cert/key inside the
+# mbedtls_ssl_config after mbedtls_ssl_setup copies them to the SSL context. We rely on the singleton
+# server config (TlsServer::conf) staying intact across multiple handshakes - freeing breaks every
+# connection after the first with MBEDTLS_ERR_SSL_NO_USABLE_CIPHERSUITE (-0x6980)
+
+# Restrict TLS to 1.2. TLS 1.0 and 1.1 are deprecated and considered unsafe (RFC 8996).
+# TLS 1.3 would need ESP-IDF v5.x (mbedTLS 3.x); not available on this v4.x toolchain.
+CONFIG_MBEDTLS_SSL_PROTO_TLS1=n
+CONFIG_MBEDTLS_SSL_PROTO_TLS1_1=n
+
+# Trim the mbedTLS surface to what we actually serve: ECDHE-ECDSA with a P-256 cert + AES-GCM/SHA256.
+# Disabling unused key exchanges and curves shrinks the binary and speeds up cipher selection inside
+# ssl_parse_client_hello. The cert is ECDSA-only so we cannot serve any RSA-based ciphersuite anyway
+CONFIG_MBEDTLS_KEY_EXCHANGE_RSA=n
+CONFIG_MBEDTLS_KEY_EXCHANGE_DHE_RSA=n
+CONFIG_MBEDTLS_KEY_EXCHANGE_ECDHE_RSA=n
+CONFIG_MBEDTLS_KEY_EXCHANGE_ECDH_RSA=n
+CONFIG_MBEDTLS_KEY_EXCHANGE_ECDH_ECDSA=n
+# Keep only the two curves the TLS server can use: P-256 (always) and P-384 (matches the Cortex-M
+# Ethernet path on MB6HC / MB6XD, so cert/key materials are portable between interfaces)
+CONFIG_MBEDTLS_ECP_DP_SECP192R1_ENABLED=n
+CONFIG_MBEDTLS_ECP_DP_SECP224R1_ENABLED=n
+CONFIG_MBEDTLS_ECP_DP_SECP521R1_ENABLED=n
+CONFIG_MBEDTLS_ECP_DP_SECP192K1_ENABLED=n
+CONFIG_MBEDTLS_ECP_DP_SECP224K1_ENABLED=n
+CONFIG_MBEDTLS_ECP_DP_SECP256K1_ENABLED=n
+CONFIG_MBEDTLS_ECP_DP_BP256R1_ENABLED=n
+CONFIG_MBEDTLS_ECP_DP_BP384R1_ENABLED=n
+CONFIG_MBEDTLS_ECP_DP_BP512R1_ENABLED=n
+CONFIG_MBEDTLS_ECP_DP_CURVE25519_ENABLED=n
 
 CONFIG_LWIP_ESP_LWIP_ASSERT=n
 CONFIG_ESP_TASK_WDT=n
+
+# Hardware-watchpoint stack-overflow detection. The canary check alone (default) only catches an
+# overflow on context switch; a task that overflows and then returns or yields with the canary
+# still intact slips through. The watchpoint traps the instant SP crosses the boundary, so we
+# get a real panic dump with a backtrace instead of silent memory corruption
+CONFIG_FREERTOS_WATCHPOINT_END_OF_STACK=y
+
+# Main task (app_main / loop()) hosts the SPI ProcessRequest path AND Connection::PollAll(). On the
+# TLS path that means mbedtls_x509_crt_parse, mbedtls_pk_parse_key and mbedtls_ssl_conf_own_cert
+# during networkEnableTls, plus mbedtls_ssl_read on every poll of a TLS-wrapped connection. Each can
+# eat 4-6 KiB of stack. The default 3584 leaves ~1.1 KiB headroom which is not enough
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# Raise app_main priority so the SPI request handler can preempt the listener/handshake work.
+# Default is 1; with the listener task at MAIN_PRIO+2 = 3, app_main at 4 wins SPI service every time
+CONFIG_ESP_MAIN_TASK_PRIORITY=4

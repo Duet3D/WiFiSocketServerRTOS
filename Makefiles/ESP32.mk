@@ -18,10 +18,12 @@ ESP32:
 	$(Q)bash -c 'set -e && \
 		export IDF_PATH="$(ESP_IDF)" && \
 		source "$$IDF_PATH/export.sh" >/dev/null 2>&1 && \
-		if [ -f "$(ESP32_BUILD_DIR)/sdkconfig.saved" ]; then \
+		if [ -f "$(ESP32_BUILD_DIR)/sdkconfig.saved" ] && [ "$(ESP32_BUILD_DIR)/sdkconfig.saved" -nt "$(CURDIR)/sdkconfig.defaults" ]; then \
 			cp "$(ESP32_BUILD_DIR)/sdkconfig.saved" sdkconfig; \
 		else \
 			echo "  CONFIG  ESP32"; \
+			rm -f sdkconfig sdkconfig.old; \
+			rm -rf "$(ESP32_BUILD_DIR)"; \
 			idf.py -B "$(ESP32_BUILD_DIR)" set-target $(ESP32_TARGET) \
 				$(if $(filter 1,$(V)),,>/dev/null 2>&1); \
 		fi && \

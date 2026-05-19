@@ -46,6 +46,9 @@ extern "C"
 #include "PooledStrings.h"
 #include "HSPI.h"
 #include "WirelessConfigurationMgr.h"
+#if SUPPORTS_TLS
+#include "TlsServer.h"
+#endif
 
 #include "include/MessageFormats.h"
 #include "Listener.h"
@@ -69,7 +72,6 @@ extern esp_rom_spiflash_chip_t g_rom_flashchip;
 #include "esp_wpa2.h"
 
 
-static_assert(WIFI_CONNECTION_PRIO == MAIN_PRIO);
 
 static const uint32_t MaxConnectTime = 40 * 1000;			// how long we wait for WiFi to connect in milliseconds
 static const uint32_t TransferReadyTimeout = 10;			// how many milliseconds we allow for the Duet to set
@@ -231,6 +233,30 @@ static void StatePrintTask(void* data)
 static inline bool isFirstConnectWorkaround()
 {
 	return firstConnectWorkaroundStage == 1 || firstConnectWorkaroundStage == 2;
+}
+
+// uxTaskGetStackHighWaterMark returns the lowest free stack ever seen on this task, in StackType_t
+// units (4 B on Xtensa). Multiply for a bytes figure. A zero or near-zero reading means the task is
+// one deep call away from corrupting adjacent memory.
+//
+// Label note: "appMain" is the FreeRTOS app_main task that runs loop() -> ProcessRequest +
+// Connection::PollAll (so mbedTLS cert parse + ssl_read live here). "wifiEvt" is the
+// WiFiConnectionTask that only services WiFi event-loop callbacks (idle most of the time)
+static void PrintStackWatermarks(const char *tag)
+{
+	const unsigned wordSize = sizeof(StackType_t);
+	const unsigned appMainW = mainTaskHdl     ? uxTaskGetStackHighWaterMark(mainTaskHdl)            : 0;
+	const unsigned wifiEvtW = connPollTaskHdl ? uxTaskGetStackHighWaterMark(connPollTaskHdl)        : 0;
+	const unsigned listenW  = Listener::GetTaskHandle()
+								? uxTaskGetStackHighWaterMark(Listener::GetTaskHandle())            : 0;
+	const unsigned dnsW     = dns.GetTaskHandle()
+								? uxTaskGetStackHighWaterMark(dns.GetTaskHandle())                  : 0;
+	ets_printf("stack [%s] appMain=%u(%uB) wifiEvt=%u(%uB) tcpListen=%u(%uB) dns=%u(%uB)\n",
+		tag,
+		appMainW, appMainW * wordSize,
+		wifiEvtW, wifiEvtW * wordSize,
+		listenW,  listenW  * wordSize,
+		dnsW,     dnsW     * wordSize);
 }
 
 static void HandleWiFiEvent(void* arg, esp_event_base_t event_base,
@@ -1566,10 +1592,22 @@ void ProcessRequest()
 		case NetworkCommand::networkListen:				// listen for incoming connections
 			if (messageHeaderIn.hdr.dataLength == sizeof(ListenOrConnectData))
 			{
-				messageHeaderIn.hdr.param32 = hspi.transfer32(ResponseEmpty);
+				const bool wantTls = (messageHeaderIn.hdr.flags & MessageHeaderSamToEsp::FlagTls) != 0;
+#if SUPPORTS_TLS
+				const bool tlsReady = wantTls && TlsServer::GetInstance()->IsEnabled();
+				const int32_t initialResponse = (wantTls && !tlsReady) ? ResponseWrongState : ResponseEmpty;
+#else
+				const bool tlsReady = false;
+				const int32_t initialResponse = wantTls ? ResponseWrongState : ResponseEmpty;
+#endif
+				messageHeaderIn.hdr.param32 = hspi.transfer32(initialResponse);
 				ListenOrConnectData lcData;
 				hspi.transferDwords(nullptr, reinterpret_cast<uint32_t*>(&lcData), NumDwords(sizeof(lcData)));
-				const bool ok = Listener::Start(lcData.port, lcData.remoteIp, lcData.protocol, lcData.maxConnections);
+				if (wantTls && !tlsReady)
+				{
+					break;
+				}
+				const bool ok = Listener::Start(lcData.port, lcData.remoteIp, lcData.protocol, lcData.maxConnections, wantTls);
 				if (ok)
 				{
 					if (lcData.protocol < 3)			// if it's FTP, HTTP or Telnet protocol
@@ -1736,6 +1774,50 @@ void ProcessRequest()
 			}
 			break;
 
+#if SUPPORTS_TLS
+		case NetworkCommand::networkEnableTls:
+			// Probe + (re)build the mbedTLS server config from stored cert/key
+			if (TlsServer::GetInstance()->Enable())
+			{
+				SendResponse(ResponseEmpty);
+			}
+			else
+			{
+				SendResponse(ResponseNoTlsCert);
+			}
+			break;
+
+		case NetworkCommand::networkSetTlsCert:
+		case NetworkCommand::networkSetTlsKey:
+			{
+				const uint16_t dataLen = messageHeaderIn.hdr.dataLength;
+				if (dataLen == 0 || dataLen > MaxDataLength)
+				{
+					SendResponse(ResponseBadDataLength);
+					break;
+				}
+				messageHeaderIn.hdr.param32 = hspi.transfer32(ResponseEmpty);
+				hspi.transferDwords(nullptr, reinterpret_cast<uint32_t*>(transferBuffer), NumDwords(dataLen));
+				WirelessConfigurationMgr *mgr = WirelessConfigurationMgr::GetInstance();
+				const bool ok = (messageHeaderIn.hdr.command == NetworkCommand::networkSetTlsCert)
+					? mgr->SetTlsCert(transferBuffer, dataLen)
+					: mgr->SetTlsKey(transferBuffer, dataLen);
+				if (!ok)
+				{
+					lastError = "Failed to store TLS material";
+				}
+				// Storing new material invalidates any cached config - caller will re-probe via networkEnableTls
+				TlsServer::GetInstance()->Disable();
+			}
+			break;
+
+		case NetworkCommand::networkClearTls:
+			TlsServer::GetInstance()->Disable();
+			(void)WirelessConfigurationMgr::GetInstance()->ClearTls();
+			SendResponse(ResponseEmpty);
+			break;
+#endif // SUPPORTS_TLS
+
 		default:
 			SendResponse(ResponseUnknownCommand);
 			break;
@@ -1832,6 +1914,7 @@ void ProcessRequest()
 
 		case NetworkCommand::diagnostics:
 			Connection::ReportConnections();
+			PrintStackWatermarks("M122");
 			delay(20);										// give the Duet main processor time to digest that
 			stats_display();
 			break;
@@ -1956,13 +2039,20 @@ void setup()
 	cfg.nvs_enable = false;
 	esp_wifi_init(&cfg);
 
-	xTaskCreate(WiFiConnectionTask, "wifiConnection", WIFI_CONNECTION_STACK, NULL, WIFI_CONNECTION_PRIO, &connPollTaskHdl);
+	xTaskCreatePinnedToCore(WiFiConnectionTask, "wifiConnection", WIFI_CONNECTION_STACK, NULL,
+		WIFI_CONNECTION_PRIO, &connPollTaskHdl, NET_TASK_CPU);
 
 #ifdef DEBUG
 	xTaskCreate(StatePrintTask, "statePrint", STATE_PRINT_STACK, NULL, tskIDLE_PRIORITY, NULL);
 #endif
 
 	esp_log_level_set("wifi", ESP_LOG_NONE);
+#if SUPPORTS_TLS
+	// "Dynamic Impl" is ESP-IDF's mbedTLS dynamic-buffer wrapper. It logs every fetch_input failure
+	// at ERROR level, including the CONN_RESET that fires on benign peer disconnects. We already log
+	// handshake/read outcomes from our own code with proper context, so silence the wrapper noise
+	esp_log_level_set("Dynamic Impl", ESP_LOG_NONE);
+#endif
 
 	wirelessConfigMgr->Init();
 

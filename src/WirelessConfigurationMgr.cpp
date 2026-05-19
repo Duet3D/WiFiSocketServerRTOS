@@ -672,3 +672,82 @@ int WirelessConfigurationMgr::FindEmptySsidEntry() const
 
 	return -1;
 }
+
+#if SUPPORTS_TLS
+
+// SetKV defaults to create-or-truncate, so each call fully replaces the stored cert/key. The cert and
+// key arrive from the SAM as a single chunk each, so there is nothing to accumulate
+bool WirelessConfigurationMgr::SetTlsCert(const void *buff, size_t sz)
+{
+	return SetKV(TLS_CERT_KEY, buff, sz);
+}
+
+bool WirelessConfigurationMgr::SetTlsKey(const void *buff, size_t sz)
+{
+	return SetKV(TLS_KEY_KEY, buff, sz);
+}
+
+bool WirelessConfigurationMgr::ClearTls()
+{
+	const bool a = DeleteKV(TLS_CERT_KEY);
+	const bool b = DeleteKV(TLS_KEY_KEY);
+	return a || b;		// success if at least one existed; non-existent is fine
+}
+
+// Read both cert and key into newly-allocated buffers. mbedtls_pem_parse() requires a null-terminator,
+// so each buffer has one extra byte and *certLen/*keyLen include the terminator.
+// Caller frees *certBuf and *keyBuf with free(). Returns false (and frees anything allocated) on any failure
+bool WirelessConfigurationMgr::LoadTlsCertAndKey(uint8_t **certBuf, size_t *certLen, uint8_t **keyBuf, size_t *keyLen)
+{
+	*certBuf = nullptr;
+	*keyBuf = nullptr;
+	*certLen = 0;
+	*keyLen = 0;
+
+	auto loadOne = [&](const char *key, uint8_t **outBuf, size_t *outLen) -> bool
+	{
+		int f = open(key, O_RDONLY);
+		if (f < 0)
+		{
+			return false;
+		}
+		const off_t sz = lseek(f, 0, SEEK_END);
+		if (sz <= 0 || lseek(f, 0, SEEK_SET) != 0)
+		{
+			close(f);
+			return false;
+		}
+		uint8_t *buf = static_cast<uint8_t *>(malloc(sz + 1));
+		if (!buf)
+		{
+			close(f);
+			return false;
+		}
+		const ssize_t got = read(f, buf, sz);
+		close(f);
+		if (got != sz)
+		{
+			free(buf);
+			return false;
+		}
+		buf[sz] = 0;
+		*outBuf = buf;
+		*outLen = static_cast<size_t>(sz) + 1;
+		return true;
+	};
+
+	if (!loadOne(TLS_CERT_KEY, certBuf, certLen))
+	{
+		return false;
+	}
+	if (!loadOne(TLS_KEY_KEY, keyBuf, keyLen))
+	{
+		free(*certBuf);
+		*certBuf = nullptr;
+		*certLen = 0;
+		return false;
+	}
+	return true;
+}
+
+#endif // SUPPORTS_TLS

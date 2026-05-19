@@ -18,10 +18,12 @@ ESP32C3:
 	$(Q)bash -c 'set -e && \
 		export IDF_PATH="$(ESP_IDF)" && \
 		source "$$IDF_PATH/export.sh" >/dev/null 2>&1 && \
-		if [ -f "$(ESP32C3_BUILD_DIR)/sdkconfig.saved" ]; then \
+		if [ -f "$(ESP32C3_BUILD_DIR)/sdkconfig.saved" ] && [ "$(ESP32C3_BUILD_DIR)/sdkconfig.saved" -nt "$(CURDIR)/sdkconfig.defaults" ]; then \
 			cp "$(ESP32C3_BUILD_DIR)/sdkconfig.saved" sdkconfig; \
 		else \
 			echo "  CONFIG  ESP32-C3"; \
+			rm -f sdkconfig sdkconfig.old; \
+			rm -rf "$(ESP32C3_BUILD_DIR)"; \
 			idf.py -B "$(ESP32C3_BUILD_DIR)" set-target $(ESP32C3_TARGET) \
 				$(if $(filter 1,$(V)),,>/dev/null 2>&1); \
 		fi && \

@@ -72,6 +72,12 @@ enum class NetworkCommand : uint8_t
 	networkStartScan,           // start a scan for APs the module can connect to
 	networkGetScanResult,       // get the results of the previously started scan
 	networkAddEnterpriseSsid,	// add an enterprise ssid and its credentials
+
+	// Added at version 2.4 (TLS server support)
+	networkEnableTls,			// probe TLS support and (re)build the SSL config from stored cert/key
+	networkSetTlsCert,			// chunk-store a PEM-encoded server certificate in WiFi-module flash
+	networkSetTlsKey,			// chunk-store a PEM-encoded server private key in WiFi-module flash
+	networkClearTls,			// erase stored cert/key and tear down the SSL config
 };
 
 // Message header sent from the SAM to the ESP
@@ -88,6 +94,7 @@ struct MessageHeaderSamToEsp
 
 	static const uint8_t FlagCloseAfterWrite = 0x01;
 	static const uint8_t FlagPush = 0x02;
+	static const uint8_t FlagTls = 0x04;		// on networkListen: mark this listener as TLS-wrapped
 };
 
 const size_t headerDwords = NumDwords(sizeof(MessageHeaderSamToEsp));
@@ -342,6 +349,7 @@ const int32_t ResponseBadParameter = -11;
 const int32_t ResponseNoScanStarted = -12;
 const int32_t ResponseScanInProgress = -13;
 const int32_t ResponseUnknownError = -14;
+const int32_t ResponseNoTlsCert = -15;			// networkEnableTls: no cert/key stored on this WiFi module
 
 const size_t MaxRememberedNetworks = 20;
 static_assert((MaxRememberedNetworks + 1) * ReducedWirelessConfigurationDataSize <= MaxDataLength, "Too many remembered networks");

@@ -3,7 +3,7 @@
 #ifndef CONFIG_H_INCLUDED
 #define CONFIG_H_INCLUDED
 
-#define VERSION_MAIN	"2.3.0-rc.1"
+#define VERSION_MAIN	"2.4.0"
 
 #ifdef DEBUG
 #define VERSION_DEBUG	"-D"
@@ -14,6 +14,16 @@
 #include "driver/gpio.h"
 
 const char* const firmwareVersion = VERSION_MAIN VERSION_DEBUG;
+
+// TLS server support. The ESP8266 cannot host a TLS server in practice - its free heap (~40 KiB) is
+// smaller than the peak of a single mbedTLS handshake (~40-50 KiB) - so the TLS code is compiled out
+// there. ESP32-family targets enable it. If the ESP8266 ever gains TLS support (e.g. via reduced
+// mbedTLS record buffers, as done on the RRF/LwIP path), only this define needs to change
+#ifdef ESP8266
+#define SUPPORTS_TLS	0
+#else
+#define SUPPORTS_TLS	1
+#endif
 
 // Define the maximum length (bytes) of file upload data per SPI packet. Use a multiple of the SD card sector or cluster size for efficiency.
 // ************ This must be kept in step with the corresponding value in RepRapFirmware *************
@@ -82,10 +92,23 @@ const uint8_t Backlog = 8;
 #define debugPrintfAlways(_format, ...)	ets_printf("%s(%d): ", __FILE__, __LINE__); ets_printf(_format, __VA_ARGS__)
 
 
-#define MAIN_PRIO								(ESP_TASK_TCPIP_PRIO + 1)
-#define WIFI_CONNECTION_PRIO					(MAIN_PRIO)
-#define TCP_LISTENER_PRIO						(ESP_TASK_TCPIP_PRIO)
-#define DNS_SERVER_PRIO							(ESP_TASK_MAIN_PRIO)
+// App-task priorities. All sit comfortably BELOW the ESP-IDF lwIP/TCPIP thread (TCPIP_PRIO=18) so
+// packet processing always wins, and ABOVE base ESP_TASK_MAIN_PRIO=1. The previous arrangement put
+// the listener task AT TCPIP_PRIO, which both contends with lwIP and starves app_main during
+// parallel TLS handshakes (since handshake stepping is CPU-bound). MAIN_PRIO is the priority the
+// FreeRTOS app_main task self-elevates to in main.cpp; it must be ABOVE WIFI/LISTENER so SPI
+// service preempts any in-progress crypto when SAM signals a transfer
+#define MAIN_PRIO								(ESP_TASK_MAIN_PRIO + 4)
+#define WIFI_CONNECTION_PRIO					(ESP_TASK_MAIN_PRIO + 3)
+#define TCP_LISTENER_PRIO						(ESP_TASK_MAIN_PRIO + 3)
+#define DNS_SERVER_PRIO							(ESP_TASK_MAIN_PRIO + 1)
+
+// On dual-core ESP32 / ESP32-S3, pin the network-handling tasks (TLS handshakes, WiFi events,
+// DNS, accept callbacks) to CPU0 where lwIP and the WiFi driver already live. app_main is pinned
+// to CPU1 by CONFIG_ESP_MAIN_TASK_AFFINITY_CPU1 in sdkconfig.defaults - that keeps SPI service
+// uninterrupted by crypto work. On single-core targets (ESP32-C3, ESP8266) the core argument to
+// xTaskCreatePinnedToCore is ignored, so this define is harmless there
+#define NET_TASK_CPU							(0)
 
 // Main-task watchdog timeout, used by both backends (ESP-IDF: hardware esp_task_wdt;
 // ESP8266: software heartbeat checked by xTimer). 30s sits well above any legitimate
@@ -101,8 +124,13 @@ const uint8_t Backlog = 8;
 #define TCP_LISTENER_STACK  					(742)
 #define DNS_SERVER_STACK						(592)
 #else
-#define WIFI_CONNECTION_STACK					(2260)
-#define TCP_LISTENER_STACK	 					(1560)
+// WiFiConnectionTask only services WiFi event-loop callbacks - the actual ProcessRequest +
+// PollAll loop runs on the FreeRTOS app_main task (its stack is sized by ESP_MAIN_TASK_STACK_SIZE
+// in sdkconfig.defaults, not here). 8 KiB is still generous for the event handler but harmless
+#define WIFI_CONNECTION_STACK					(8192)
+// The Listener task drives the mbedTLS handshake incrementally (see Connection::StepHandshake), so
+// the ~5-6 KiB handshake stack usage lands here - bump generously to 8 KiB on ESP32-family builds
+#define TCP_LISTENER_STACK	 					(8192)
 #define DNS_SERVER_STACK						(1360)
 #endif
 

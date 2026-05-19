@@ -20,11 +20,15 @@ public:
 	void Notify();
 
 	static void Init();
-	static bool Start(uint16_t port, uint32_t ip, int protocol, int maxConns);
+	static bool Start(uint16_t port, uint32_t ip, int protocol, int maxConns, bool tls = false);
 	static void Stop(uint16_t port);
 
 	static uint16_t GetPortByProtocol(uint8_t protocol);
 	static uint8_t Find(uint8_t port);
+
+	bool IsTls() const { return tls; }
+
+	static TaskHandle_t GetTaskHandle() { return listenTaskHandle; }
 
 private:
 	struct netconn *conn;
@@ -33,6 +37,7 @@ private:
 	uint16_t port;
 	uint16_t maxConnections;
 	uint8_t protocol;
+	bool tls;
 
 	void Stop();
 

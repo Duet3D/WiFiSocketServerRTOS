@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstddef>
 
+#include "Config.h"							// for SUPPORTS_TLS
 #include "include/MessageFormats.h"
 #include "esp_partition.h"
 
@@ -41,6 +42,16 @@ public:
 	bool EndEnterpriseSsid(bool cancel);
 	const uint8_t* GetEnterpriseCredentials(int ssid, const CredentialsInfo& sizes, CredentialsInfo& offsets);
 
+#if SUPPORTS_TLS
+	// TLS server credential storage. The RRF main board uploads a single PEM-encoded cert and key
+	// in one chunk each (cert/key are capped at 2 KB by the protocol). Each call replaces the stored value
+	bool SetTlsCert(const void *buff, size_t sz);
+	bool SetTlsKey(const void *buff, size_t sz);
+	bool ClearTls();
+	// Returns newly-allocated buffers (caller frees with free()), or nullptr in *certBuf/*keyBuf if missing
+	bool LoadTlsCertAndKey(uint8_t **certBuf, size_t *certLen, uint8_t **keyBuf, size_t *keyLen);
+#endif
+
 private:
 	static WirelessConfigurationMgr* instance;
 
@@ -49,6 +60,8 @@ private:
 
 	static constexpr char SCRATCH_DIR[] = "scratch";
 	static constexpr char CREDS_DIR[] = "creds";
+	static constexpr char TLS_CERT_KEY[] = "/kvs/tls/cert";
+	static constexpr char TLS_KEY_KEY[] = "/kvs/tls/key";
 
 	static constexpr int SCRATCH_OFFSET_ID = 0;
 	static constexpr int LOADED_SSID_ID = 1;

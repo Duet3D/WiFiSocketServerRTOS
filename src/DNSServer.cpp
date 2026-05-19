@@ -77,7 +77,8 @@ bool DNSServer::start(const uint16_t &port, const std::string &domainName,
   downcaseAndRemoveWwwPrefix(_domainName);
 
   if (!taskHdl) {
-    xTaskCreate(&task, "dnsServer", DNS_SERVER_STACK, this, DNS_SERVER_PRIO, &taskHdl);
+    xTaskCreatePinnedToCore(&task, "dnsServer", DNS_SERVER_STACK, this,
+      DNS_SERVER_PRIO, &taskHdl, NET_TASK_CPU);
   }
 
   xTaskNotify(taskHdl, SERVER_START, eSetValueWithOverwrite);
