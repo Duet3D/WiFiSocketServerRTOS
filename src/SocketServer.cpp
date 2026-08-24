@@ -99,6 +99,7 @@ static_assert(HostNameLength <= CONFIG_TCPIP_ADAPTER_HOSTNAME_MAX_LENGTH);
 static_assert(HostNameLength <= CONFIG_ESP_NETIF_HOSTNAME_MAX_LENGTH);
 #endif
 static char webHostName[HostNameLength + 1] = "Duet-WiFi";
+static char mdnsHostName[HostNameLength + 1] = "";		// host name last passed to mdns_hostname_set
 
 #ifdef DEBUG
 static NetworkCommand lastCommand = NetworkCommand::nullCommand;
@@ -439,7 +440,12 @@ void RebuildServices()
 	static const mdns_txt_item_t MdnsTxtRecords[2] = { {"version", VERSION_MAIN}, {"product", "DuetWiFi"}, };
 
 	mdns_service_remove_all();
-	mdns_hostname_set(webHostName);
+	if (strcmp(mdnsHostName, webHostName) != 0)
+	{
+		// Setting the host name makes the responder send bye packets for it and re-probe, so do it only on an actual change
+		mdns_hostname_set(webHostName);
+		SafeStrncpy(mdnsHostName, webHostName, sizeof(mdnsHostName));
+	}
 	for (size_t protocol = 0; protocol < 3; protocol++)
 	{
 		const uint16_t port = Listener::GetPortByProtocol(protocol);
@@ -456,6 +462,7 @@ void RemoveMdnsServices()
 {
 	mdns_service_remove_all();
 	mdns_free();
+	mdnsHostName[0] = 0;
 }
 
 // Try to connect using the specified SSID and password
