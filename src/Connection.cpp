@@ -32,7 +32,7 @@ Connection::Connection(uint8_t num)
 	closeTimer(0),readBuf(nullptr), readIndex(0), alreadyRead(0), pendOtherEndClosed(false),
 	pendingWrite(nullptr), pendingLen(0), pendingHead(0), pendingSince(0), pendingPush(false), pendingClose(false)
 #if SUPPORTS_TLS
-	, ssl(nullptr), tlsBio(nullptr), tlsPlain(nullptr), tlsPlainHead(0), tlsPlainTail(0), handshakeStart(0)
+	, ssl(nullptr), tlsBio(nullptr), tlsPlain(nullptr), tlsPlainHead(0), tlsPlainTail(0), handshakeStart(0), teardownPending(false), teardownExternal(false)
 #endif
 {
 }
@@ -418,8 +418,11 @@ void Connection::Poll()
 void Connection::Close()
 {
 #if SUPPORTS_TLS
-	// Serialise against a TLS handshake step running on the Listener task
-	xSemaphoreTake(tlsHandshakeMutex, portMAX_DELAY);
+	if (OwnedByListener())
+	{
+		DeferTeardown(true);
+		return;
+	}
 #endif
 	switch(state)
 	{
@@ -466,9 +469,6 @@ void Connection::Close()
 		// Should not happen, but if it does just let the close proceed when sending is complete or timeout
 		break;
 	}
-#if SUPPORTS_TLS
-	xSemaphoreGive(tlsHandshakeMutex);
-#endif
 }
 
 void Connection::Deallocate()
@@ -521,19 +521,30 @@ bool Connection::Connect(uint8_t protocol, uint32_t remoteIp, uint16_t remotePor
 void Connection::Terminate(bool external)
 {
 #if SUPPORTS_TLS
-	// Serialise against a TLS handshake step running on the Listener task
-	xSemaphoreTake(tlsHandshakeMutex, portMAX_DELAY);
-	TerminateLocked(external);
-	xSemaphoreGive(tlsHandshakeMutex);
-#else
-	TerminateLocked(external);
+	if (OwnedByListener())
+	{
+		DeferTeardown(external);
+		return;
+	}
 #endif
+	TerminateNow(external);
 }
 
-// Tear the connection down and free all its resources. Must be called with tlsHandshakeMutex held
-// (Terminate does this) or from the Listener task itself (StepHandshake), so it cannot race a
-// concurrent TLS handshake step
-void Connection::TerminateLocked(bool external)
+#if SUPPORTS_TLS
+// Teardown requests come from the main task, but from Allocate until the TLS handshake completes the Listener task
+// owns the connection and may be inside mbedTLS for a long time. Waiting for it there stalls the SPI transaction the
+// request arrived in, so hand the teardown to the Listener task instead. Once StepHandshake has set the state to
+// connected the Listener task never touches the connection again, so the main task tears it down directly
+void Connection::DeferTeardown(bool external)
+{
+	teardownExternal = external;
+	teardownPending = true;
+	Listener::Wake();
+}
+#endif
+
+// Tear the connection down and free all its resources
+void Connection::TerminateNow(bool external)
 {
 #if SUPPORTS_TLS
 	// No graceful close_notify on termination - the peer is being dropped abruptly
@@ -562,10 +573,6 @@ void Connection::Accept(Listener *listener, struct netconn* conn, uint8_t protoc
 #if SUPPORTS_TLS
 	if (listener != nullptr && listener->IsTls())
 	{
-		// Hold tlsHandshakeMutex across the whole TLS setup so a concurrent Terminate from the main
-		// task (e.g. TerminateAll on network loss) cannot free a half-built context
-		xSemaphoreTake(tlsHandshakeMutex, portMAX_DELAY);
-
 		debugPrintf("tls.accept[%u]: enter, heap=%u\n", (unsigned)number, (unsigned)esp_get_free_heap_size());
 
 		// Snapshot the netconn's address fields up front. mbedtls_ssl_setup inside CreateContext
@@ -579,7 +586,6 @@ void Connection::Accept(Listener *listener, struct netconn* conn, uint8_t protoc
 			netconn_close(conn);
 			netconn_delete(conn);
 			SetState(ConnState::free);
-			xSemaphoreGive(tlsHandshakeMutex);
 		};
 
 		tlsBio = static_cast<TlsBioState *>(malloc(sizeof(TlsBioState)));
@@ -615,7 +621,6 @@ void Connection::Accept(Listener *listener, struct netconn* conn, uint8_t protoc
 		handshakeStart = millis();
 		SetState(ConnState::connecting);
 		debugPrintf("tls.accept[%u]: ready for handshake, heap=%u\n", (unsigned)number, (unsigned)esp_get_free_heap_size());
-		xSemaphoreGive(tlsHandshakeMutex);
 		return;
 	}
 #endif
@@ -624,21 +629,20 @@ void Connection::Accept(Listener *listener, struct netconn* conn, uint8_t protoc
 }
 
 #if SUPPORTS_TLS
-// Advance the deferred TLS handshake for this connection by one step. Returns true if the handshake
-// is still in progress and should be stepped again. Runs on the Listener task, which has the stack
-// headroom mbedTLS needs; stepping rather than running the handshake to completion keeps one slow
-// client from delaying accepts or other handshakes. tlsHandshakeMutex serialises this against a
-// teardown (Close / Terminate) requested by the main task
+// Advance the deferred TLS handshake for this connection by one step and apply any teardown the main task deferred
+// to us, see DeferTeardown. Returns true if the handshake is still in progress and should be stepped again. Runs on
+// the Listener task, which has the stack headroom mbedTLS needs; stepping rather than running the handshake to
+// completion keeps one slow client from delaying accepts or other handshakes
 bool Connection::StepHandshake()
 {
-	if (ssl == nullptr || state != ConnState::connecting)
+	if (!teardownPending && (ssl == nullptr || state != ConnState::connecting))
 	{
-		return false;		// not a connection with a handshake in progress
+		return false;
 	}
 
-	xSemaphoreTake(tlsHandshakeMutex, portMAX_DELAY);
-	bool stillPending = false;
-	if (ssl != nullptr && state == ConnState::connecting)		// re-check under the lock - a teardown may have run since
+	// The teardown flag is checked again after the step: the main task may set it while the step runs, having seen
+	// the connection as still ours, and nobody else will act on it once the state is connected
+	if (!ApplyDeferredTeardown() && ssl != nullptr && state == ConnState::connecting)
 	{
 		const int rc = TlsServer::GetInstance()->HandshakeStep(ssl);
 		if (rc == 0)
@@ -647,20 +651,31 @@ bool Connection::StepHandshake()
 		}
 		else if (rc != MBEDTLS_ERR_SSL_WANT_READ && rc != MBEDTLS_ERR_SSL_WANT_WRITE)
 		{
-			TerminateLocked(false);								// handshake failed - HandshakeStep already logged it
+			TerminateNow(false);								// handshake failed - HandshakeStep already logged it
 		}
 		else if (millis() - handshakeStart >= MaxHandshakeTime)
 		{
 			debugPrintAlways("TLS handshake timed out\n");
-			TerminateLocked(false);
+			TerminateNow(false);
 		}
-		else
-		{
-			stillPending = true;								// WANT_READ / WANT_WRITE - more steps needed
-		}
+		return !ApplyDeferredTeardown() && state == ConnState::connecting;
 	}
-	xSemaphoreGive(tlsHandshakeMutex);
-	return stillPending;
+	return false;
+}
+
+// Run a teardown deferred by the main task, returning true if there was one. Runs on the Listener task
+bool Connection::ApplyDeferredTeardown()
+{
+	if (!teardownPending)
+	{
+		return false;
+	}
+	teardownPending = false;
+	if (state != ConnState::free)
+	{
+		TerminateNow(teardownExternal);
+	}
+	return true;
 }
 #endif
 
@@ -771,9 +786,6 @@ void Connection::Report()
 /*static*/ void Connection::Init()
 {
 	allocateMutex = xSemaphoreCreateMutex();
-#if SUPPORTS_TLS
-	tlsHandshakeMutex = xSemaphoreCreateMutex();
-#endif
 
 	for (size_t i = 0; i < MaxConnections; ++i)
 	{
@@ -911,9 +923,6 @@ void Connection::Report()
 
 // Static data
 SemaphoreHandle_t Connection::allocateMutex = nullptr;
-#if SUPPORTS_TLS
-SemaphoreHandle_t Connection::tlsHandshakeMutex = nullptr;
-#endif
 Connection *Connection::connectionList[MaxConnections];
 
 // End

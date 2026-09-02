@@ -20,6 +20,7 @@ public:
 	void Notify();
 
 	static void Init();
+	static void Wake();
 	static bool Start(uint16_t port, uint32_t ip, int protocol, int maxConns, bool tls = false);
 	static void Stop(uint16_t port);
 

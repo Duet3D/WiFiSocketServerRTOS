@@ -107,25 +107,27 @@ private:
 	size_t tlsPlainHead;		// next byte to read from tlsPlain
 	size_t tlsPlainTail;		// next byte to fill in tlsPlain
 	uint32_t handshakeStart;	// millis() when the deferred TLS handshake began - see MaxHandshakeTime
+	volatile bool teardownPending;	// teardown requested while the Listener task owned the connection, see DeferTeardown
+	bool teardownExternal;		// the 'external' argument of the deferred teardown
 #endif
 
 	void Poll();
 	void SetState(ConnState st) { state = st; }
 	void InitConnection(Listener *listener, struct netconn *conn);
 	void Connected(Listener *listener, struct netconn *conn);
-	void TerminateLocked(bool external);
+	void TerminateNow(bool external);
 	ConnState GetState() const { return state; }
 
 #if SUPPORTS_TLS
 	void FreeTls();
+	bool OwnedByListener() const { return state == ConnState::allocated || (ssl != nullptr && state == ConnState::connecting); }
+	void DeferTeardown(bool external);
+	bool ApplyDeferredTeardown();
 	bool StepHandshake();
 	static bool PollHandshakes();
 #endif
 
 	static SemaphoreHandle_t allocateMutex;
-#if SUPPORTS_TLS
-	static SemaphoreHandle_t tlsHandshakeMutex;
-#endif
 	static Connection *connectionList[MaxConnections];
 
 	void FreePbuf();

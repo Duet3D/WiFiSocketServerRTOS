@@ -213,6 +213,12 @@ void Listener::Notify()
 	}
 }
 
+// Wake the Listener task without a listen notification, so it runs PollHandshakes
+/*static*/ void Listener::Wake()
+{
+	xTaskNotify(listenTaskHandle, 0, eNoAction);
+}
+
 /*static*/ void Listener::ListenerTask(void* p)
 {
 	TickType_t waitTime = portMAX_DELAY;
