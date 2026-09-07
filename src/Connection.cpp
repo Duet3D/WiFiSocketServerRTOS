@@ -243,6 +243,10 @@ void Connection::DrainPending()
 		FreePending();
 		return;
 	}
+	if (written != 0)
+	{
+		pendingSince = millis();		// any progress restarts the clock, so a slow link cannot trip the stall timeout
+	}
 	pendingHead += written;
 	if (pendingHead == pendingLen)
 	{
@@ -255,7 +259,7 @@ void Connection::DrainPending()
 	}
 	else if (millis() - pendingSince >= MaxAckTime)
 	{
-		// The peer has not made room for the data in a long time, give up on it rather than holding the socket forever
+		// The peer has taken nothing at all for a long time, give up on it rather than holding the socket forever
 		debugPrintfAlways("Write stall len=%u\n", pendingLen - pendingHead);
 		Terminate(false);
 	}
@@ -277,11 +281,14 @@ void Connection::FreePending()
 // accepting data when the heap runs low. Data that lwIP still refuses lands in pendingWrite, which blocks further writes until drained
 size_t Connection::CanWrite() const
 {
-	if (!(state == ConnState::connected && !pendOtherEndClosed) || pendingLen != 0 || conn == nullptr || conn->pcb.tcp == nullptr || esp_get_free_heap_size() < MinFreeHeapForWrite)
+	// lwIP nulls conn->pcb.tcp from its own thread when the peer resets, so read it once instead of checking
+	// and dereferencing separately; a pcb freed after the snapshot only yields a stale byte count, which the clamp absorbs
+	struct tcp_pcb *const pcb = (conn != nullptr) ? conn->pcb.tcp : nullptr;
+	if (!(state == ConnState::connected && !pendOtherEndClosed) || pendingLen != 0 || pcb == nullptr || esp_get_free_heap_size() < MinFreeHeapForWrite)
 	{
 		return 0;
 	}
-	return std::min((size_t)tcp_sndbuf(conn->pcb.tcp), MaxDataLength);
+	return std::min((size_t)tcp_sndbuf(pcb), MaxDataLength);
 }
 
 void Connection::Poll()
@@ -334,7 +341,8 @@ void Connection::Poll()
 		}
 		else if (state == ConnState::closePending)
 		{
-			if (!conn || !conn->pcb.tcp || !conn->pcb.tcp->unacked)
+			struct tcp_pcb *const pcb = (conn != nullptr) ? conn->pcb.tcp : nullptr;
+			if (pcb == nullptr || pcb->unacked == nullptr)
 			{
 				SetState(ConnState::closeReady);
 			}
@@ -397,7 +405,8 @@ void Connection::Poll()
 		// The other end may have closed the connection with RST, which causes lwIP
 		// to free the PCB. Detect this and close immediately instead of waiting for
 		// the acknowledgement timer to expire.
-		if (!conn->pcb.tcp || !conn->pcb.tcp->unacked)
+		struct tcp_pcb *const pcb = (conn != nullptr) ? conn->pcb.tcp : nullptr;
+		if (pcb == nullptr || pcb->unacked == nullptr)
 		{
 			SetState(ConnState::closeReady);
 		}
@@ -424,6 +433,7 @@ void Connection::Close()
 		return;
 	}
 #endif
+	struct tcp_pcb *const pcb = (conn != nullptr) ? conn->pcb.tcp : nullptr;
 	switch(state)
 	{
 	case ConnState::connected:						// both ends are still connected
@@ -432,7 +442,7 @@ void Connection::Close()
 			pendingClose = true;					// DrainPending closes once lwIP has taken the stashed data
 			break;
 		}
-		if (conn->pcb.tcp && conn->pcb.tcp->unacked)
+		if (pcb != nullptr && pcb->unacked != nullptr)
 		{
 			closeTimer = millis();
 			netconn_shutdown(conn, true, false);	// shut down recieve
@@ -691,11 +701,12 @@ void Connection::InitConnection(Listener *listener, struct netconn* conn)
 {
 	this->conn = conn;
 	this->listener = listener;
-	if (conn != nullptr && conn->pcb.tcp != nullptr)
+	struct tcp_pcb *const pcb = (conn != nullptr) ? conn->pcb.tcp : nullptr;
+	if (pcb != nullptr)
 	{
-		localPort = conn->pcb.tcp->local_port;
-		remotePort = conn->pcb.tcp->remote_port;
-		remoteIp = conn->pcb.tcp->remote_ip.u_addr.ip4.addr;
+		localPort = pcb->local_port;
+		remotePort = pcb->remote_port;
+		remoteIp = pcb->remote_ip.u_addr.ip4.addr;
 	}
 	else
 	{

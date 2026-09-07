@@ -465,6 +465,18 @@ void RemoveMdnsServices()
 	mdnsHostName[0] = 0;
 }
 
+// Drop the BSSID pin StartClient set, so a reconnect may land on any AP of the network. The reconnect path never
+// rescans, so without this an AP that has gone away would be retried forever instead of falling back to another one
+static void ClearBssidPin()
+{
+	wifi_config_t cfg;
+	if (esp_wifi_get_config(WIFI_IF_STA, &cfg) == ESP_OK && cfg.sta.bssid_set)
+	{
+		cfg.sta.bssid_set = false;
+		esp_wifi_set_config(WIFI_IF_STA, &cfg);
+	}
+}
+
 // Try to connect using the specified SSID and password
 void ConnectToAccessPoint()
 {
@@ -628,6 +640,7 @@ void WiFiConnectionTask(void* data)
 			wirelessConfigMgr->GetSsid(currentSsid, wp);
 			currentState = isFirstConnectWorkaround() ? WiFiState::connecting : WiFiState::reconnecting;
 			debugPrintf("Trying to reconnect to ssid \"%s\" with password \"%s\"\n", wp.ssid, wp.password);
+			ClearBssidPin();
 			ConnectToAccessPoint();
 		}
 
@@ -772,6 +785,10 @@ pre(currentState == WiFiState::idle)
 
 	SafeStrncpy((char*)wifi_config.sta.ssid, (char*)wp.ssid,
 		std::min(sizeof(wifi_config.sta.ssid), sizeof(wp.ssid)));
+
+	// ESP-IDF ignores sta.bssid unless bssid_set is set, so without this the driver picks the AP itself and can
+	// settle on a distant node of a mesh, where every node shares the SSID and the station never roams
+	wifi_config.sta.bssid_set = true;
 
 #ifndef ESP8266
 	if (channel >= 0 && channel <= 13)

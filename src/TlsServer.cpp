@@ -183,6 +183,10 @@ int TlsServer::HandshakeStep(mbedtls_ssl_context *ctx)
 		{
 			debugPrint("handshake aborted: peer closed before completion\n");
 		}
+		else if (rc == MBEDTLS_ERR_SSL_FATAL_ALERT_MESSAGE)
+		{
+			debugPrintAlways("handshake rejected by peer, usually our certificate not matching the address or not being trusted\n");
+		}
 		else
 		{
 			debugPrintfAlways("handshake failed: -0x%04x\n", -rc);
