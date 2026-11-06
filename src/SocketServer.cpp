@@ -1366,6 +1366,11 @@ void ProcessRequest()
 					}
 
 				}
+				else
+				{
+					// RRF caches the MAC from the first status response, which arrives while idle
+					esp_read_mac(response->macAddress, ESP_MAC_WIFI_STA);
+				}
 
 				response->freeHeap = esp_get_free_heap_size();
 
